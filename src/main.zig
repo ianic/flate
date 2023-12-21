@@ -22,7 +22,8 @@ pub fn main() !void {
     // try gzStat(fbs.reader());
 
     const stdin = std.io.getStdIn();
-    try gzStat(stdin.reader());
+    var gs = gzStatInit(stdin.reader());
+    try gs.parse();
     //try helloWorldBlockType01();
     //try helloWorldBlockType00();
 }
@@ -37,76 +38,129 @@ fn helloWorldBlockType00() !void {
     try stdout_file.writeAll(&dataBlockType00);
 }
 
-fn gzStat(reader: anytype) !void {
-    var br = std.io.bitReader(.little, reader);
-    var rd = br.reader();
-    const magic1 = try rd.readByte();
-    const magic2 = try rd.readByte();
-    const method = try rd.readByte();
-    try rd.skipBytes(7, .{}); // flags, mtime(4), xflags, os
+fn gzStatInit(reader: anytype) GzStat(@TypeOf(reader)) {
+    return GzStat(@TypeOf(reader)).init(reader);
+}
 
-    if (magic1 != 0x1f or magic2 != 0x8b or method != 0x08) return error.InvalidGzipHeader;
+fn GzStat(comptime ReaderType: type) type {
+    const BitReaderType = std.io.BitReader(.little, ReaderType);
+    return struct {
+        br: BitReaderType,
 
-    const bfinal = try br.readBitsNoEof(u1, 1);
-    const block_type = try br.readBitsNoEof(u2, 2);
+        const Self = @This();
 
-    std.debug.print("{x} {x}\n", .{ bfinal, block_type });
+        pub fn init(br: ReaderType) Self {
+            return .{
+                .br = BitReaderType.init(br),
+            };
+        }
 
-    switch (block_type) {
-        0 => unreachable,
-        1 => {
+        fn readByte(self: *Self) !u8 {
+            return self.br.readBitsNoEof(u8, 8);
+        }
+
+        fn skipBytes(self: *Self, n: usize) !void {
+            var i = n;
+            while (i > 0) : (i -= 1) {
+                _ = try self.readByte();
+            }
+        }
+
+        fn gzipHeader(self: *Self) !void {
+            const magic1 = try self.readByte();
+            const magic2 = try self.readByte();
+            const method = try self.readByte();
+            try self.skipBytes(7); // flags, mtime(4), xflags, os
+            if (magic1 != 0x1f or magic2 != 0x8b or method != 0x08)
+                return error.InvalidGzipHeader;
+        }
+
+        inline fn readBits(self: *Self, comptime U: type, bits: usize) !U {
+            return try self.br.readBitsNoEof(U, bits);
+        }
+
+        inline fn readLiteralBits(self: *Self, comptime U: type, bits: usize) !U {
+            return @bitReverse(try self.br.readBitsNoEof(U, bits));
+        }
+
+        inline fn readLength(self: *Self, code: u16) !u16 {
+            assert(code >= 256 and code <= 285);
+            const idx: usize = code - 256 - 1;
+            const l = lengths[idx];
+            assert(l.code == code);
+            return if (l.extra_bits > 0)
+                l.base_length + try self.readBits(u16, l.extra_bits)
+            else
+                l.base_length;
+        }
+
+        inline fn readDistance(self: *Self) !u16 {
+            const code = try self.readBits(u5, 5);
+            assert(code <= 29);
+            const d = distances[code];
+            assert(d.code == code);
+            return if (d.extra_bits > 0)
+                d.base_distance + try self.readBits(u16, d.extra_bits)
+            else
+                d.base_distance;
+        }
+
+        pub fn parse(self: *Self) !void {
+            try self.gzipHeader();
+
             while (true) {
-                const code7 = @bitReverse(try br.readBitsNoEof(u7, 7));
+                const bfinal = try self.readBits(u1, 1);
+                const block_type = try self.readBits(u2, 2);
+                switch (block_type) {
+                    0 => unreachable,
+                    1 => try self.block01(),
+                    else => unreachable,
+                }
+                if (bfinal == 1) break;
+            }
+        }
+
+        fn block01(self: *Self) !void {
+            while (true) {
+                const code7 = try self.readLiteralBits(u7, 7);
                 std.debug.print("\ncode7: {b:0<7}", .{code7});
 
-                if (code7 < 0b0010111) {
-                    // 7 bits 256-279
+                if (code7 < 0b0010_111) { // 7 bits, 256-279, codes 0000_000 - 0010_111
                     if (code7 == 0) break; // end of block code 256
                     const code: u16 = @as(u16, code7) + 256;
-                    const idx: usize = @as(usize, code7) - 1;
-                    const l = lengths[idx];
-                    assert(l.code == code);
-                    var length: u16 = l.base_length;
-                    if (l.extra_bits > 0) {
-                        length += try br.readBitsNoEof(u16, l.extra_bits);
-                    }
-                    std.debug.print(" code: {b:0<8}, length: {d}", .{ code, length });
-
-                    const distance_code = try br.readBitsNoEof(u5, 5);
-                    const d = distances[distance_code];
-                    assert(d.code == distance_code);
-                    var distance: u16 = d.base_distance;
-                    if (d.extra_bits > 0) {
-                        distance += try br.readBitsNoEof(u16, d.extra_bits);
-                    }
-                    std.debug.print(" distance: {d}", .{distance});
-                } else if (code7 < 0b1011111) {
-                    // 8 bits 0-143
-                    const code: u8 = (@as(u8, code7) << 1) + try br.readBitsNoEof(u1, 1);
-                    const lit = code - 0x30;
-
-                    std.debug.print(" code: {b:0<8}", .{code});
-                    std.debug.print(" literal: 0x{x}", .{lit});
-                    if (std.ascii.isPrint(lit)) {
-                        std.debug.print(" {c}", .{lit});
-                    }
-                } else if (code7 < 0b1100011) {
-                    // 8 bit 280-287
-                    unreachable;
-                } else { // >= 0b1100100
-                    // 9 bit 144-255
-                    const code: u9 = (@as(u9, code7) << 2) + @bitReverse(try br.readBitsNoEof(u2, 2));
-                    const lit: u8 = @as(u8, @intCast(code - 0b110010000)) + 144;
-                    std.debug.print(" code: {b:0<9}", .{code});
-                    std.debug.print(" literal: 0x{x}", .{lit});
-                    if (std.ascii.isPrint(lit)) {
-                        std.debug.print(" {c}", .{lit});
-                    }
-                    // unreachable;
+                    try self.printLengthDistance(code);
+                } else if (code7 < 0b1011_111) { // 8 bits, 0-143, codes 0011_0000 through 1011_1111
+                    const lit: u8 = (@as(u8, code7 - 0b0011_000) << 1) + try self.readBits(u1, 1);
+                    printLiteral(lit);
+                } else if (code7 <= 0b1100_011) { // 8 bit, 280-287, codes 1100_0000 - 1100_0111
+                    const code: u16 = (@as(u16, code7 - 0b1100011) << 1) + try self.readBits(u1, 1) + 280;
+                    try self.printLengthDistance(code);
+                } else { // 9 bit, 144-255, codes 1_1001_0000 - 1_1111_1111
+                    const lit: u8 = (@as(u8, code7 - 0b1100_100) << 2) + try self.readLiteralBits(u2, 2) + 144;
+                    printLiteral(lit);
                 }
             }
-        },
-        else => unreachable,
+        }
+
+        fn printLengthDistance(self: *Self, code: u16) !void {
+            const length = try self.readLength(code);
+            const distance = try self.readDistance();
+
+            std.debug.print(" code: {d}, length: {d}", .{ code, length });
+            std.debug.print(" distance: {d}", .{distance});
+        }
+    };
+}
+
+fn printLiteral(lit: u8) void {
+    // if (code >= 144) {
+    //     std.debug.print(" code: {b:0>9}", .{code});
+    // } else {
+    //     std.debug.print(" code: {b:0>8} ", .{code});
+    // }
+    std.debug.print(" literal: 0x{x}", .{lit});
+    if (std.ascii.isPrint(lit)) {
+        std.debug.print(" {c}", .{lit});
     }
 }
 
