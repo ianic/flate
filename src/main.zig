@@ -1,5 +1,6 @@
 const std = @import("std");
 const assert = std.debug.assert;
+const testing = std.testing;
 
 // zig fmt: off
     const dataBlockType01 = [_]u8{
@@ -22,7 +23,7 @@ pub fn main() !void {
     // try gzStat(fbs.reader());
 
     const stdin = std.io.getStdIn();
-    var gs = gzStatInit(stdin.reader());
+    var gs = gzStat(stdin.reader());
     try gs.parse();
     //try helloWorldBlockType01();
     //try helloWorldBlockType00();
@@ -38,7 +39,7 @@ fn helloWorldBlockType00() !void {
     try stdout_file.writeAll(&dataBlockType00);
 }
 
-fn gzStatInit(reader: anytype) GzStat(@TypeOf(reader)) {
+fn gzStat(reader: anytype) GzStat(@TypeOf(reader)) {
     return GzStat(@TypeOf(reader)).init(reader);
 }
 
@@ -113,14 +114,15 @@ fn GzStat(comptime ReaderType: type) type {
                 const block_type = try self.readBits(u2, 2);
                 switch (block_type) {
                     0 => unreachable,
-                    1 => try self.block01(),
+                    1 => try self.fixedCodesBlock(),
+                    2 => try self.dynamicCodesBlock(),
                     else => unreachable,
                 }
                 if (bfinal == 1) break;
             }
         }
 
-        fn block01(self: *Self) !void {
+        fn fixedCodesBlock(self: *Self) !void {
             while (true) {
                 const code7 = try self.readLiteralBits(u7, 7);
                 std.debug.print("\ncode7: {b:0<7}", .{code7});
@@ -140,6 +142,28 @@ fn GzStat(comptime ReaderType: type) type {
                     printLiteral(lit);
                 }
             }
+        }
+
+        fn dynamicCodesBlock(self: *Self) !void {
+            // number of ll code entries present - 257
+            const hlit = try self.readBits(u16, 5) + 257;
+            // nuber of distance code entries - 1
+            const hdist = try self.readBits(u8, 5) + 1;
+            // hclen + 4 code lenths are encoded
+            const hclen = try self.readBits(u8, 4) + 4;
+            std.debug.print("hlit: {d}, hdist: {d}, hclen: {d}\n", .{ hlit, hdist, hclen });
+
+            var cl = [_]u8{0} ** 19;
+            const order = [_]u8{ 16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15 };
+            var i: u8 = 0;
+            while (i < hclen) : (i += 1) {
+                const len = try self.readBits(u3, 3);
+                cl[order[i]] = len;
+                std.debug.print("len {b}\n", .{len});
+            }
+            std.debug.print("cl {d}\n", .{cl});
+
+            return error.NotImplemented;
         }
 
         fn printLengthDistance(self: *Self, code: u16) !void {
@@ -235,3 +259,119 @@ const distances = [_]struct {
     .{ .code = 27, .extra_bits = 12, .base_distance = 12289 },
     .{ .code = 28, .extra_bits = 13, .base_distance = 16385 },
 };
+
+test "block2 example" {
+    // zig fmt: off
+    const data = [_]u8{
+        0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03,
+        0x3d, 0xc6, 0x39, 0x11, 0x00, 0x00, 0x0c, 0x02, 0x30, 0x2b, 0xb5, 0x52, 0x1e, 0xff, 0x96, 0x38, 0x16, 0x96, 0x5c, 0x1e, 0x94, 0xcb, 0x6d, 0x01,
+        0x17, 0x1c, 0x39, 0xb4, 0x13, 0x00, 0x00, 0x00,
+    };
+    // zig fmt: on
+
+    var fbs = std.io.fixedBufferStream(&data);
+    var gs = gzStat(fbs.reader());
+    try gs.parse();
+}
+
+// block header type 2 image:
+// https://youtu.be/SJPvNi4HrWQ?list=PLU4IQLU9e_OrY8oASHx0u3IXAL9TOdidm&t=7413
+
+test "length to codes" {
+    var cl = [_]u8{ 4, 3, 0, 2, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 3, 2 };
+    std.sort.insertion(u8, &cl, {}, std.sort.asc(u8));
+    var s: usize = 0;
+    for (cl) |v| {
+        if (v != 0) break;
+        s += 1;
+    }
+    std.debug.print("cl {d}", .{cl[s..]});
+    assign(cl[s..]);
+}
+
+fn assign(l: []const u8) void {
+    const n = l.len;
+    const h: u16 = l[n - 1];
+    var b: u16 = 0;
+    var i: u16 = 0;
+    while (i < n) : (i += 1) {
+        const li = l[i];
+        const s: u4 = @as(u4, @intCast((h - li)));
+        const p = b >> s;
+        std.debug.print("{b} {d} {b}\n", .{ b, li, p });
+        b += @as(u16, 1) << s;
+    }
+}
+
+pub fn Huffman(comptime alphabet_size: u16) type {
+    return struct {
+        const Symbol = struct {
+            symbol: u8,
+            code: u16,
+            code_len: u4,
+
+            pub fn asc(_: void, a: Symbol, b: Symbol) bool {
+                if (a.code_len == b.code_len) {
+                    return a.symbol < b.symbol;
+                }
+                return a.code_len < b.code_len;
+            }
+        };
+
+        alphabet: [alphabet_size]Symbol, // all symbols in alaphabet
+        symbols: []Symbol, // used symbols from alphabet, with code_len > 0
+
+        const Self = @This();
+
+        pub fn init(code_lens: []const u4) Self {
+            var self = Self{ .alphabet = undefined, .symbols = undefined };
+            // init alphabet with code_lens
+            for (&self.alphabet, 0..) |*s, i| {
+                s.code_len = if (i < code_lens.len) code_lens[i] else 0;
+                s.symbol = @as(u8, @intCast(i));
+                s.code = 0;
+            }
+            std.sort.insertion(Symbol, &self.alphabet, {}, Symbol.asc);
+
+            // find first symbol with code
+            var head: usize = 0;
+            for (self.alphabet) |s| {
+                if (s.code_len != 0) break;
+                head += 1;
+            }
+            // used symbols from alphabet
+            self.symbols = self.alphabet[head..];
+
+            // assign code to symbols
+            // reference: https://youtu.be/9_YEGLe33NA?list=PLU4IQLU9e_OrY8oASHx0u3IXAL9TOdidm&t=2639
+            const max_len = self.symbols[self.symbols.len - 1].code_len;
+            var code: u16 = 0;
+            for (self.symbols) |*sym| {
+                const shift = max_len - sym.code_len;
+                sym.code = code >> shift;
+                code += @as(u16, 1) << shift;
+            }
+
+            return self;
+        }
+    };
+}
+
+test "Huffman init" {
+    const code_lens = [_]u4{ 4, 3, 0, 2, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 3, 2 };
+    const H = Huffman(19);
+    const h = H.init(&code_lens);
+
+    try testing.expectEqual(@as(usize, 7), h.symbols.len);
+    try testing.expectEqual(H.Symbol{ .symbol = 3, .code = 0b00, .code_len = 2 }, h.symbols[0]);
+    try testing.expectEqual(H.Symbol{ .symbol = 18, .code = 0b01, .code_len = 2 }, h.symbols[1]);
+    try testing.expectEqual(H.Symbol{ .symbol = 1, .code = 0b100, .code_len = 3 }, h.symbols[2]);
+    try testing.expectEqual(H.Symbol{ .symbol = 4, .code = 0b101, .code_len = 3 }, h.symbols[3]);
+    try testing.expectEqual(H.Symbol{ .symbol = 17, .code = 0b110, .code_len = 3 }, h.symbols[4]);
+    try testing.expectEqual(H.Symbol{ .symbol = 0, .code = 0b1110, .code_len = 4 }, h.symbols[5]);
+    try testing.expectEqual(H.Symbol{ .symbol = 16, .code = 0b1111, .code_len = 4 }, h.symbols[6]);
+
+    // for (h.symbols) |s| {
+    //     std.debug.print("{}\n", .{s});
+    // }
+}
