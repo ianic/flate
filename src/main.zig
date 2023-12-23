@@ -81,6 +81,7 @@ fn GzStat(comptime ReaderType: type) type {
         }
 
         inline fn readBits(self: *Self, comptime U: type, bits: usize) !U {
+            if (bits == 0) return 0;
             return try self.br.readBitsNoEof(U, bits);
         }
 
@@ -88,26 +89,16 @@ fn GzStat(comptime ReaderType: type) type {
             return @bitReverse(try self.br.readBitsNoEof(U, bits));
         }
 
-        inline fn readLength(self: *Self, code: u16) !u16 {
+        inline fn decodeLength(self: *Self, code: u16) !u16 {
             assert(code >= 256 and code <= 285);
-            const idx: usize = code - 256 - 1;
-            const l = lengths[idx];
-            assert(l.code == code);
-            return if (l.extra_bits > 0)
-                l.base_length + try self.readBits(u16, l.extra_bits)
-            else
-                l.base_length;
+            const bl = backwardLength(code);
+            return bl.base_length + try self.readBits(u16, bl.extra_bits);
         }
 
-        inline fn readDistance(self: *Self) !u16 {
-            const code = try self.readBits(u5, 5);
+        inline fn decodeDistance(self: *Self, code: u16) !u16 {
             assert(code <= 29);
-            const d = distances[code];
-            assert(d.code == code);
-            return if (d.extra_bits > 0)
-                d.base_distance + try self.readBits(u16, d.extra_bits)
-            else
-                d.base_distance;
+            const bd = backwardDistance(code);
+            return bd.base_distance + try self.readBits(u16, bd.extra_bits);
         }
 
         pub fn parse(self: *Self) !void {
@@ -157,104 +148,81 @@ fn GzStat(comptime ReaderType: type) type {
             const hclen = try self.readBits(u8, 4) + 4;
             std.debug.print("hlit: {d}, hdist: {d}, hclen: {d}\n", .{ hlit, hdist, hclen });
 
-            var cl = [_]u4{0} ** 19;
+            // lengths for code lengths
+            var cl_l = [_]u4{0} ** 19;
             const order = [_]u8{ 16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15 };
             for (0..hclen) |i| {
-                cl[order[i]] = try self.readBits(u3, 3);
+                cl_l[order[i]] = try self.readBits(u3, 3);
             }
-            var cl_h = Huffman(19).init(&cl);
-            // std.debug.print("cl {}\n", .{cl_h});
+            var cl_h = Huffman(19).init(&cl_l);
 
-            var litl = [_]u4{0} ** (285 + 30);
-            var i: usize = 0;
-            while (i < hlit) {
+            // literal code lengths
+            var lit_l = [_]u4{0} ** (285);
+            var pos: usize = 0;
+            while (pos < hlit) {
                 const c = try cl_h.lookup(self, Self.readBit);
-                //std.debug.print("lookup: {d}\n", .{c});
-                switch (c) {
-                    16 => { // Copy the previous code length 3 - 6 times. The next 2 bits indicate repeat length
-                        const n: u8 = try self.readBits(u8, 2) + 3;
-                        for (0..n) |_| {
-                            litl[i] = litl[i - 1];
-                            i += 1;
-                        }
-                    },
-                    17 => { // Repeat a code length of 0 for 3 - 10 times. (3 bits of length)
-                        const n: u8 = try self.readBits(u8, 3) + 3;
-                        i += n;
-                    },
-
-                    18 => { // Repeat a code length of 0 for 11 - 138 times (7 bits of length)
-                        const n: u8 = try self.readBits(u8, 7) + 11;
-                        i += n;
-                    },
-                    else => {
-                        assert(c <= 15);
-                        litl[i] = @intCast(c);
-                        i += 1;
-                    },
-                }
+                pos += try self.dynamicCodeLength(c, &lit_l, pos);
             }
-            std.debug.print("litl {d} {d}\n", .{ i, litl });
+            //std.debug.print("litl {d} {d}\n", .{ pos, lit_l });
 
-            var dstl = [_]u4{0} ** (30);
-            i = 0;
-            while (i < hdist) {
+            // distance code lenths
+            var dst_l = [_]u4{0} ** (30);
+            pos = 0;
+            while (pos < hdist) {
                 const c = try cl_h.lookup(self, Self.readBit);
-                //std.debug.print("lookup: {d}\n", .{c});
-                switch (c) {
-                    16 => { // Copy the previous code length 3 - 6 times. The next 2 bits indicate repeat length
-                        const n: u8 = try self.readBits(u8, 2) + 3;
-                        for (0..n) |_| {
-                            dstl[i] = dstl[i - 1];
-                            i += 1;
-                        }
-                    },
-                    17 => { // Repeat a code length of 0 for 3 - 10 times. (3 bits of length)
-                        const n: u8 = try self.readBits(u8, 3) + 3;
-                        i += n;
-                    },
-
-                    18 => { // Repeat a code length of 0 for 11 - 138 times (7 bits of length)
-                        const n: u8 = try self.readBits(u8, 7) + 11;
-                        i += n;
-                    },
-                    else => {
-                        assert(c <= 15);
-                        dstl[i] = @intCast(c);
-                        i += 1;
-                    },
-                }
+                pos += try self.dynamicCodeLength(c, &dst_l, pos);
             }
-            std.debug.print("dstl {d} {d}\n", .{ i, dstl });
+            //std.debug.print("dstl {d} {d}\n", .{ pos, dst_l });
 
-            var lit_h = Huffman(285).init(&litl);
-            var dst_h = Huffman(30).init(&dstl);
+            var lit_h = Huffman(285).init(&lit_l);
+            var dst_h = Huffman(30).init(&dst_l);
             // std.debug.print("litl {}\n", .{lit_h});
             while (true) {
-                const s = try lit_h.lookup(self, Self.readBit);
-                std.debug.print("symbol {d}\n", .{s});
-                switch (s) {
-                    258 => {
-                        const ds = try dst_h.lookup(self, Self.readBit);
-                        const offset = try self.readBit();
-                        std.debug.print("ds {d}, offset: {d}\n", .{ ds, offset });
-                    },
-                    263 => {
-                        const ds = try dst_h.lookup(self, Self.readBit);
-                        const offset = try self.readBits(u2, 2);
-                        std.debug.print("ds {d}, offset: {d}\n", .{ ds, offset });
-                    },
-                    256 => return,
-                    else => {},
+                const code = try lit_h.lookup(self, Self.readBit);
+                std.debug.print("symbol {d}\n", .{code});
+                if (code == 256) return; // end of block
+                if (code > 256) {
+                    // decode backward pointer <length, distance>
+                    const length = try self.decodeLength(code);
+                    const ds = try dst_h.lookup(self, Self.readBit); // distance symbol
+                    const distance = try self.decodeDistance(ds);
+
+                    std.debug.print("length: {d}, distance: {d}\n", .{ length, distance });
+                } else {
+                    // literal
                 }
             }
+        }
 
-            return error.NotImplemented;
+        // Decode code length symbol to code length.
+        // Returns number of postitions advanced.
+        fn dynamicCodeLength(self: *Self, code: u16, lens: []u4, pos: usize) !usize {
+            assert(code <= 18);
+            switch (code) {
+                16 => {
+                    // Copy the previous code length 3 - 6 times.
+                    // The next 2 bits indicate repeat length
+                    const n: u8 = try self.readBits(u8, 2) + 3;
+                    for (0..n) |i| {
+                        lens[pos + i] = lens[pos + i - 1];
+                    }
+                    return n;
+                },
+                // Repeat a code length of 0 for 3 - 10 times. (3 bits of length)
+                17 => return try self.readBits(u8, 3) + 3,
+                // Repeat a code length of 0 for 11 - 138 times (7 bits of length)
+                18 => return try self.readBits(u8, 7) + 11,
+                else => {
+                    // Represent code lengths of 0 - 15
+                    lens[pos] = @intCast(code);
+                    return 1;
+                },
+            }
         }
 
         fn printLengthDistance(self: *Self, code: u16) !void {
-            const length = try self.readLength(code);
-            const distance = try self.readDistance();
+            const length = try self.decodeLength(code);
+            const distance = try self.decodeDistance(try self.readBits(u16, 5));
 
             std.debug.print(" code: {d}, length: {d}", .{ code, length });
             std.debug.print(" distance: {d}", .{distance});
@@ -274,11 +242,17 @@ fn printLiteral(lit: u8) void {
     }
 }
 
-const lengths = [_]struct {
+fn backwardLength(c: u16) BackwardLength {
+    return backward_lengths[c - 257];
+}
+
+const BackwardLength = struct {
     code: u16,
     extra_bits: u8,
     base_length: u16,
-}{
+};
+
+const backward_lengths = [_]BackwardLength{
     .{ .code = 257, .extra_bits = 0, .base_length = 3 },
     .{ .code = 258, .extra_bits = 0, .base_length = 4 },
     .{ .code = 259, .extra_bits = 0, .base_length = 5 },
@@ -310,11 +284,17 @@ const lengths = [_]struct {
     .{ .code = 285, .extra_bits = 0, .base_length = 258 },
 };
 
-const distances = [_]struct {
+fn backwardDistance(c: u16) BackwardDistance {
+    return backward_distances[c];
+}
+
+const BackwardDistance = struct {
     code: u8,
     extra_bits: u8,
     base_distance: u16,
-}{
+};
+
+const backward_distances = [_]BackwardDistance{
     .{ .code = 0, .extra_bits = 0, .base_distance = 1 },
     .{ .code = 1, .extra_bits = 0, .base_distance = 2 },
     .{ .code = 2, .extra_bits = 0, .base_distance = 3 },
