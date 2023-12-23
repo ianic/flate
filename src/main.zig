@@ -367,24 +367,27 @@ pub fn Huffman(comptime alphabet_size: u16) type {
         pub fn lookup(
             self: *Self,
             context: anytype,
-            comptime readBit: fn (@TypeOf(context)) anyerror!u16,
+            comptime readBit: fn (@TypeOf(context)) anyerror!u1,
         ) !u8 {
             const min = self.at(0).code_len;
-            const max = self.at(self.len() - 1).code_len;
 
+            // read first min code_len bytes
             var code: u16 = 0;
-            var code_len: u16 = 0;
-            var i: usize = 0;
-            while (code_len <= max) : (code_len += 1) {
-                if (code_len >= min) {
-                    while (true) {
-                        const sym = self.at(i);
-                        if (sym.code_len != code_len) break;
-                        if (sym.code == code) return sym.symbol;
-                        i += 1;
-                    }
-                }
+            for (0..min) |_| {
+                code = code << 1;
+                code += try readBit(context);
+            }
 
+            var code_len: u16 = min;
+            var i: usize = 0;
+            while (i < self.len()) : (code_len += 1) {
+                while (true) { // check symbols with code_len
+                    const sym = self.at(i);
+                    if (sym.code_len != code_len) break;
+                    if (sym.code == code) return sym.symbol;
+                    i += 1;
+                }
+                // read 1 more bit
                 code = code << 1;
                 code += try readBit(context);
             }
@@ -421,7 +424,7 @@ test "Huffman init" {
     var rdr = std.io.bitReader(.little, fbs.reader());
 
     const s = struct {
-        pub fn inner(br: *std.io.BitReader(.little, std.io.FixedBufferStream([]const u8).Reader)) anyerror!u16 {
+        pub fn inner(br: *std.io.BitReader(.little, std.io.FixedBufferStream([]const u8).Reader)) anyerror!u1 {
             return try br.readBitsNoEof(u1, 1);
         }
     };
