@@ -160,7 +160,7 @@ fn GzStat(comptime ReaderType: type) type {
             var lit_l = [_]u4{0} ** (285);
             var pos: usize = 0;
             while (pos < hlit) {
-                const c = try cl_h.lookup(self, Self.readBit);
+                const c = try cl_h.next(self, Self.readBit);
                 pos += try self.dynamicCodeLength(c, &lit_l, pos);
             }
             //std.debug.print("litl {d} {d}\n", .{ pos, lit_l });
@@ -169,7 +169,7 @@ fn GzStat(comptime ReaderType: type) type {
             var dst_l = [_]u4{0} ** (30);
             pos = 0;
             while (pos < hdist) {
-                const c = try cl_h.lookup(self, Self.readBit);
+                const c = try cl_h.next(self, Self.readBit);
                 pos += try self.dynamicCodeLength(c, &dst_l, pos);
             }
             //std.debug.print("dstl {d} {d}\n", .{ pos, dst_l });
@@ -178,13 +178,13 @@ fn GzStat(comptime ReaderType: type) type {
             var dst_h = Huffman(30).init(&dst_l);
             // std.debug.print("litl {}\n", .{lit_h});
             while (true) {
-                const code = try lit_h.lookup(self, Self.readBit);
+                const code = try lit_h.next(self, Self.readBit);
                 std.debug.print("symbol {d}\n", .{code});
                 if (code == 256) return; // end of block
                 if (code > 256) {
                     // decode backward pointer <length, distance>
                     const length = try self.decodeLength(code);
-                    const ds = try dst_h.lookup(self, Self.readBit); // distance symbol
+                    const ds = try dst_h.next(self, Self.readBit); // distance symbol
                     const distance = try self.decodeDistance(ds);
 
                     std.debug.print("length: {d}, distance: {d}\n", .{ length, distance });
@@ -433,8 +433,8 @@ pub fn Huffman(comptime alphabet_size: u16) type {
         }
 
         // find next symbol
-        pub fn lookup(
-            self: *Self,
+        pub fn next(
+            self: Self,
             context: anytype,
             comptime readBit: fn (@TypeOf(context)) anyerror!u1,
         ) !u16 {
@@ -491,10 +491,10 @@ test "Huffman init" {
         }
     }.readBit;
 
-    try testing.expectEqual(@as(u16, 0), try h.lookup(&rdr, readBit));
-    try testing.expectEqual(@as(u16, 16), try h.lookup(&rdr, readBit));
-    try testing.expectEqual(@as(u16, 17), try h.lookup(&rdr, readBit));
-    try testing.expectEqual(@as(u16, 1), try h.lookup(&rdr, readBit));
-    try testing.expectEqual(@as(u16, 18), try h.lookup(&rdr, readBit));
-    try testing.expectError(error.EndOfStream, h.lookup(&rdr, readBit));
+    try testing.expectEqual(@as(u16, 0), try h.next(&rdr, readBit));
+    try testing.expectEqual(@as(u16, 16), try h.next(&rdr, readBit));
+    try testing.expectEqual(@as(u16, 17), try h.next(&rdr, readBit));
+    try testing.expectEqual(@as(u16, 1), try h.next(&rdr, readBit));
+    try testing.expectEqual(@as(u16, 18), try h.next(&rdr, readBit));
+    try testing.expectError(error.EndOfStream, h.next(&rdr, readBit));
 }
