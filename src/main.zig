@@ -76,6 +76,10 @@ fn GzStat(comptime ReaderType: type) type {
                 return error.InvalidGzipHeader;
         }
 
+        fn readBit(self: *Self) anyerror!u1 {
+            return try self.br.readBitsNoEof(u1, 1);
+        }
+
         inline fn readBits(self: *Self, comptime U: type, bits: usize) !U {
             return try self.br.readBitsNoEof(U, bits);
         }
@@ -147,21 +151,103 @@ fn GzStat(comptime ReaderType: type) type {
         fn dynamicCodesBlock(self: *Self) !void {
             // number of ll code entries present - 257
             const hlit = try self.readBits(u16, 5) + 257;
-            // nuber of distance code entries - 1
-            const hdist = try self.readBits(u8, 5) + 1;
+            // number of distance code entries - 1
+            const hdist = try self.readBits(u16, 5) + 1;
             // hclen + 4 code lenths are encoded
             const hclen = try self.readBits(u8, 4) + 4;
             std.debug.print("hlit: {d}, hdist: {d}, hclen: {d}\n", .{ hlit, hdist, hclen });
 
-            var cl = [_]u8{0} ** 19;
+            var cl = [_]u4{0} ** 19;
             const order = [_]u8{ 16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15 };
-            var i: u8 = 0;
-            while (i < hclen) : (i += 1) {
-                const len = try self.readBits(u3, 3);
-                cl[order[i]] = len;
-                std.debug.print("len {b}\n", .{len});
+            for (0..hclen) |i| {
+                cl[order[i]] = try self.readBits(u3, 3);
             }
-            std.debug.print("cl {d}\n", .{cl});
+            var cl_h = Huffman(19).init(&cl);
+            // std.debug.print("cl {}\n", .{cl_h});
+
+            var litl = [_]u4{0} ** (285 + 30);
+            var i: usize = 0;
+            while (i < hlit) {
+                const c = try cl_h.lookup(self, Self.readBit);
+                //std.debug.print("lookup: {d}\n", .{c});
+                switch (c) {
+                    16 => { // Copy the previous code length 3 - 6 times. The next 2 bits indicate repeat length
+                        const n: u8 = try self.readBits(u8, 2) + 3;
+                        for (0..n) |_| {
+                            litl[i] = litl[i - 1];
+                            i += 1;
+                        }
+                    },
+                    17 => { // Repeat a code length of 0 for 3 - 10 times. (3 bits of length)
+                        const n: u8 = try self.readBits(u8, 3) + 3;
+                        i += n;
+                    },
+
+                    18 => { // Repeat a code length of 0 for 11 - 138 times (7 bits of length)
+                        const n: u8 = try self.readBits(u8, 7) + 11;
+                        i += n;
+                    },
+                    else => {
+                        assert(c <= 15);
+                        litl[i] = @intCast(c);
+                        i += 1;
+                    },
+                }
+            }
+            std.debug.print("litl {d} {d}\n", .{ i, litl });
+
+            var dstl = [_]u4{0} ** (30);
+            i = 0;
+            while (i < hdist) {
+                const c = try cl_h.lookup(self, Self.readBit);
+                //std.debug.print("lookup: {d}\n", .{c});
+                switch (c) {
+                    16 => { // Copy the previous code length 3 - 6 times. The next 2 bits indicate repeat length
+                        const n: u8 = try self.readBits(u8, 2) + 3;
+                        for (0..n) |_| {
+                            dstl[i] = dstl[i - 1];
+                            i += 1;
+                        }
+                    },
+                    17 => { // Repeat a code length of 0 for 3 - 10 times. (3 bits of length)
+                        const n: u8 = try self.readBits(u8, 3) + 3;
+                        i += n;
+                    },
+
+                    18 => { // Repeat a code length of 0 for 11 - 138 times (7 bits of length)
+                        const n: u8 = try self.readBits(u8, 7) + 11;
+                        i += n;
+                    },
+                    else => {
+                        assert(c <= 15);
+                        dstl[i] = @intCast(c);
+                        i += 1;
+                    },
+                }
+            }
+            std.debug.print("dstl {d} {d}\n", .{ i, dstl });
+
+            var lit_h = Huffman(285).init(&litl);
+            var dst_h = Huffman(30).init(&dstl);
+            // std.debug.print("litl {}\n", .{lit_h});
+            while (true) {
+                const s = try lit_h.lookup(self, Self.readBit);
+                std.debug.print("symbol {d}\n", .{s});
+                switch (s) {
+                    258 => {
+                        const ds = try dst_h.lookup(self, Self.readBit);
+                        const offset = try self.readBit();
+                        std.debug.print("ds {d}, offset: {d}\n", .{ ds, offset });
+                    },
+                    263 => {
+                        const ds = try dst_h.lookup(self, Self.readBit);
+                        const offset = try self.readBits(u2, 2);
+                        std.debug.print("ds {d}, offset: {d}\n", .{ ds, offset });
+                    },
+                    256 => return,
+                    else => {},
+                }
+            }
 
             return error.NotImplemented;
         }
@@ -306,7 +392,7 @@ fn assign(l: []const u8) void {
 pub fn Huffman(comptime alphabet_size: u16) type {
     return struct {
         const Symbol = struct {
-            symbol: u8,
+            symbol: u16,
             code: u16,
             code_len: u4,
 
@@ -318,30 +404,30 @@ pub fn Huffman(comptime alphabet_size: u16) type {
             }
         };
 
-        alphabet: [alphabet_size]Symbol, // all symbols in alaphabet
+        symbols: [alphabet_size]Symbol, // all symbols in alaphabet, sorted by code_len, symbol
         head: usize, // location of first used symbol, with code_len > 0
 
         const Self = @This();
 
         pub fn init(code_lens: []const u4) Self {
-            var self = Self{ .alphabet = undefined, .head = 0 };
+            var self = Self{ .symbols = undefined, .head = 0 };
             // init alphabet with code_lens
-            for (&self.alphabet, 0..) |*s, i| {
+            for (&self.symbols, 0..) |*s, i| {
                 s.code_len = if (i < code_lens.len) code_lens[i] else 0;
-                s.symbol = @as(u8, @intCast(i));
+                s.symbol = @intCast(i);
                 s.code = 0;
             }
-            std.sort.insertion(Symbol, &self.alphabet, {}, Symbol.asc);
+            std.sort.insertion(Symbol, &self.symbols, {}, Symbol.asc);
 
             // find first symbol with code
             var head: usize = 0;
-            for (self.alphabet) |s| {
+            for (self.symbols) |s| {
                 if (s.code_len != 0) break;
                 head += 1;
             }
             // used symbols from alphabet
             self.head = head;
-            const symbols = self.alphabet[head..];
+            const symbols = self.symbols[head..];
 
             // assign code to symbols
             // reference: https://youtu.be/9_YEGLe33NA?list=PLU4IQLU9e_OrY8oASHx0u3IXAL9TOdidm&t=2639
@@ -356,19 +442,22 @@ pub fn Huffman(comptime alphabet_size: u16) type {
             return self;
         }
 
+        // number of used symbols in alphabet
         fn len(self: Self) usize {
             return alphabet_size - self.head;
         }
 
+        // retruns symbol at index
         fn at(self: Self, idx: usize) Symbol {
-            return self.alphabet[idx + self.head];
+            return self.symbols[idx + self.head];
         }
 
+        // find next symbol
         pub fn lookup(
             self: *Self,
             context: anytype,
             comptime readBit: fn (@TypeOf(context)) anyerror!u1,
-        ) !u8 {
+        ) !u16 {
             const min = self.at(0).code_len;
 
             // read first min code_len bytes
@@ -396,8 +485,6 @@ pub fn Huffman(comptime alphabet_size: u16) type {
     };
 }
 
-const EOS = error.EndOfStream;
-
 test "Huffman init" {
     const code_lens = [_]u4{ 4, 3, 0, 2, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 3, 2 };
     const H = Huffman(19);
@@ -412,27 +499,22 @@ test "Huffman init" {
     try testing.expectEqual(H.Symbol{ .symbol = 0, .code = 0b1110, .code_len = 4 }, h.at(5));
     try testing.expectEqual(H.Symbol{ .symbol = 16, .code = 0b1111, .code_len = 4 }, h.at(6));
 
-    // for (h.symbols) |s| {
-    //     std.debug.print("{}\n", .{s});
-    // }
-
     const data = [2]u8{
         0b11_11_0111, 0b10_001_011,
     };
 
     var fbs = std.io.fixedBufferStream(&data);
     var rdr = std.io.bitReader(.little, fbs.reader());
-
-    const s = struct {
-        pub fn inner(br: *std.io.BitReader(.little, std.io.FixedBufferStream([]const u8).Reader)) anyerror!u1 {
+    const readBit = struct {
+        pub fn readBit(br: *std.io.BitReader(.little, std.io.FixedBufferStream([]const u8).Reader)) anyerror!u1 {
             return try br.readBitsNoEof(u1, 1);
         }
-    };
+    }.readBit;
 
-    try testing.expectEqual(@as(u8, 0), try h.lookup(&rdr, s.inner));
-    try testing.expectEqual(@as(u8, 16), try h.lookup(&rdr, s.inner));
-    try testing.expectEqual(@as(u8, 17), try h.lookup(&rdr, s.inner));
-    try testing.expectEqual(@as(u8, 1), try h.lookup(&rdr, s.inner));
-    try testing.expectEqual(@as(u8, 18), try h.lookup(&rdr, s.inner));
-    try testing.expectError(error.EndOfStream, h.lookup(&rdr, s.inner));
+    try testing.expectEqual(@as(u16, 0), try h.lookup(&rdr, readBit));
+    try testing.expectEqual(@as(u16, 16), try h.lookup(&rdr, readBit));
+    try testing.expectEqual(@as(u16, 17), try h.lookup(&rdr, readBit));
+    try testing.expectEqual(@as(u16, 1), try h.lookup(&rdr, readBit));
+    try testing.expectEqual(@as(u16, 18), try h.lookup(&rdr, readBit));
+    try testing.expectError(error.EndOfStream, h.lookup(&rdr, readBit));
 }
