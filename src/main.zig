@@ -319,12 +319,12 @@ pub fn Huffman(comptime alphabet_size: u16) type {
         };
 
         alphabet: [alphabet_size]Symbol, // all symbols in alaphabet
-        symbols: []Symbol, // used symbols from alphabet, with code_len > 0
+        head: usize, // location of first used symbol, with code_len > 0
 
         const Self = @This();
 
         pub fn init(code_lens: []const u4) Self {
-            var self = Self{ .alphabet = undefined, .symbols = undefined };
+            var self = Self{ .alphabet = undefined, .head = 0 };
             // init alphabet with code_lens
             for (&self.alphabet, 0..) |*s, i| {
                 s.code_len = if (i < code_lens.len) code_lens[i] else 0;
@@ -340,13 +340,14 @@ pub fn Huffman(comptime alphabet_size: u16) type {
                 head += 1;
             }
             // used symbols from alphabet
-            self.symbols = self.alphabet[head..];
+            self.head = head;
+            const symbols = self.alphabet[head..];
 
             // assign code to symbols
             // reference: https://youtu.be/9_YEGLe33NA?list=PLU4IQLU9e_OrY8oASHx0u3IXAL9TOdidm&t=2639
-            const max_len = self.symbols[self.symbols.len - 1].code_len;
+            const max_len = symbols[symbols.len - 1].code_len;
             var code: u16 = 0;
-            for (self.symbols) |*sym| {
+            for (symbols) |*sym| {
                 const shift = max_len - sym.code_len;
                 sym.code = code >> shift;
                 code += @as(u16, 1) << shift;
@@ -354,24 +355,87 @@ pub fn Huffman(comptime alphabet_size: u16) type {
 
             return self;
         }
+
+        fn len(self: Self) usize {
+            return alphabet_size - self.head;
+        }
+
+        fn at(self: Self, idx: usize) Symbol {
+            return self.alphabet[idx + self.head];
+        }
+
+        pub fn lookup(
+            self: *Self,
+            context: anytype,
+            comptime readBit: fn (@TypeOf(context)) u16,
+        ) !u8 {
+            const min = self.at(0).code_len;
+            const max = self.at(self.len() - 1).code_len;
+
+            var code: u16 = 0;
+            var code_len: u16 = 0;
+            var i: usize = 0;
+            while (code_len <= max) : (code_len += 1) {
+                if (code_len >= min) {
+                    while (true) {
+                        const sym = &self.at(i);
+                        //std.debug.print("compare: {b} {d} {} {d}\n", .{ code, code_len, sym, i });
+                        if (sym.code_len != code_len) break;
+                        if (sym.code == code) {
+                            // std.debug.print("return: {b} {d} {} {d}\n", .{ code, code_len, sym, i });
+                            return sym.symbol;
+                        }
+                        i += 1;
+                    }
+                }
+
+                code = code << 1;
+                code += readBit(context);
+            }
+            return error.CodeNotFound;
+        }
     };
 }
+
+const EOS = error.EndOfStream;
 
 test "Huffman init" {
     const code_lens = [_]u4{ 4, 3, 0, 2, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 3, 2 };
     const H = Huffman(19);
-    const h = H.init(&code_lens);
+    var h = H.init(&code_lens);
 
-    try testing.expectEqual(@as(usize, 7), h.symbols.len);
-    try testing.expectEqual(H.Symbol{ .symbol = 3, .code = 0b00, .code_len = 2 }, h.symbols[0]);
-    try testing.expectEqual(H.Symbol{ .symbol = 18, .code = 0b01, .code_len = 2 }, h.symbols[1]);
-    try testing.expectEqual(H.Symbol{ .symbol = 1, .code = 0b100, .code_len = 3 }, h.symbols[2]);
-    try testing.expectEqual(H.Symbol{ .symbol = 4, .code = 0b101, .code_len = 3 }, h.symbols[3]);
-    try testing.expectEqual(H.Symbol{ .symbol = 17, .code = 0b110, .code_len = 3 }, h.symbols[4]);
-    try testing.expectEqual(H.Symbol{ .symbol = 0, .code = 0b1110, .code_len = 4 }, h.symbols[5]);
-    try testing.expectEqual(H.Symbol{ .symbol = 16, .code = 0b1111, .code_len = 4 }, h.symbols[6]);
+    try testing.expectEqual(@as(usize, 7), h.len());
+    try testing.expectEqual(H.Symbol{ .symbol = 3, .code = 0b00, .code_len = 2 }, h.at(0));
+    try testing.expectEqual(H.Symbol{ .symbol = 18, .code = 0b01, .code_len = 2 }, h.at(1));
+    try testing.expectEqual(H.Symbol{ .symbol = 1, .code = 0b100, .code_len = 3 }, h.at(2));
+    try testing.expectEqual(H.Symbol{ .symbol = 4, .code = 0b101, .code_len = 3 }, h.at(3));
+    try testing.expectEqual(H.Symbol{ .symbol = 17, .code = 0b110, .code_len = 3 }, h.at(4));
+    try testing.expectEqual(H.Symbol{ .symbol = 0, .code = 0b1110, .code_len = 4 }, h.at(5));
+    try testing.expectEqual(H.Symbol{ .symbol = 16, .code = 0b1111, .code_len = 4 }, h.at(6));
 
     // for (h.symbols) |s| {
     //     std.debug.print("{}\n", .{s});
     // }
+
+    const data = [2]u8{
+        0b11_11_0111, 0b10_001_011,
+    };
+
+    var fbs = std.io.fixedBufferStream(&data);
+    var rdr = std.io.bitReader(.little, fbs.reader());
+
+    const s = struct {
+        pub fn inner(br: *std.io.BitReader(.little, std.io.FixedBufferStream([]const u8).Reader)) u16 {
+            const u = br.readBitsNoEof(u1, 1) catch unreachable;
+            return u;
+        }
+    };
+
+    try testing.expectEqual(@as(u8, 0), try h.lookup(&rdr, s.inner));
+    try testing.expectEqual(@as(u8, 16), try h.lookup(&rdr, s.inner));
+    try testing.expectEqual(@as(u8, 17), try h.lookup(&rdr, s.inner));
+    try testing.expectEqual(@as(u8, 1), try h.lookup(&rdr, s.inner));
+
+    try testing.expectEqual(@as(u8, 18), try h.lookup(&rdr, s.inner));
+    // try testing.expectError(error.EndOfStream, h.lookup(&rdr, s.inner));
 }
