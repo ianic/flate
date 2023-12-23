@@ -367,7 +367,7 @@ pub fn Huffman(comptime alphabet_size: u16) type {
         pub fn lookup(
             self: *Self,
             context: anytype,
-            comptime readBit: fn (@TypeOf(context)) u16,
+            comptime readBit: fn (@TypeOf(context)) anyerror!u16,
         ) !u8 {
             const min = self.at(0).code_len;
             const max = self.at(self.len() - 1).code_len;
@@ -378,19 +378,15 @@ pub fn Huffman(comptime alphabet_size: u16) type {
             while (code_len <= max) : (code_len += 1) {
                 if (code_len >= min) {
                     while (true) {
-                        const sym = &self.at(i);
-                        //std.debug.print("compare: {b} {d} {} {d}\n", .{ code, code_len, sym, i });
+                        const sym = self.at(i);
                         if (sym.code_len != code_len) break;
-                        if (sym.code == code) {
-                            // std.debug.print("return: {b} {d} {} {d}\n", .{ code, code_len, sym, i });
-                            return sym.symbol;
-                        }
+                        if (sym.code == code) return sym.symbol;
                         i += 1;
                     }
                 }
 
                 code = code << 1;
-                code += readBit(context);
+                code += try readBit(context);
             }
             return error.CodeNotFound;
         }
@@ -425,9 +421,8 @@ test "Huffman init" {
     var rdr = std.io.bitReader(.little, fbs.reader());
 
     const s = struct {
-        pub fn inner(br: *std.io.BitReader(.little, std.io.FixedBufferStream([]const u8).Reader)) u16 {
-            const u = br.readBitsNoEof(u1, 1) catch unreachable;
-            return u;
+        pub fn inner(br: *std.io.BitReader(.little, std.io.FixedBufferStream([]const u8).Reader)) anyerror!u16 {
+            return try br.readBitsNoEof(u1, 1);
         }
     };
 
@@ -435,7 +430,6 @@ test "Huffman init" {
     try testing.expectEqual(@as(u8, 16), try h.lookup(&rdr, s.inner));
     try testing.expectEqual(@as(u8, 17), try h.lookup(&rdr, s.inner));
     try testing.expectEqual(@as(u8, 1), try h.lookup(&rdr, s.inner));
-
     try testing.expectEqual(@as(u8, 18), try h.lookup(&rdr, s.inner));
-    // try testing.expectError(error.EndOfStream, h.lookup(&rdr, s.inner));
+    try testing.expectError(error.EndOfStream, h.lookup(&rdr, s.inner));
 }
