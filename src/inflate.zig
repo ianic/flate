@@ -73,12 +73,26 @@ fn Inflate(comptime ReaderType: type) type {
                 const bfinal = try self.readBits(u1, 1);
                 const block_type = try self.readBits(u2, 2);
                 switch (block_type) {
-                    0 => unreachable,
+                    0 => {
+                        self.br.alignToByte(); // skip 5 bits
+                        try self.nonCompressedBlock();
+                    },
                     1 => try self.fixedCodesBlock(),
                     2 => try self.dynamicCodesBlock(),
                     else => unreachable,
                 }
                 if (bfinal == 1) break;
+            }
+
+            // TODO: footer
+        }
+
+        fn nonCompressedBlock(self: *Self) !void {
+            const len = try self.readBits(u16, 16);
+            const nlen = try self.readBits(u16, 16);
+            if (len != ~nlen) return error.DeflateWrongNlen;
+            for (0..len) |_| {
+                self.sw.write(try self.readByte());
             }
         }
 
@@ -297,6 +311,21 @@ const backward_distances = [_]BackwardDistance{
     .{ .code = 27, .extra_bits = 12, .base_distance = 12289 },
     .{ .code = 28, .extra_bits = 13, .base_distance = 16385 },
 };
+
+test "inflate non-compressed block (block type 0)" {
+    const data = [_]u8{
+        0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, // gzip header (10 bytes)
+        0b0000_0001, 0b0000_1100, 0x00, 0b1111_0011, 0xff, // deflate fixed buffer header len, nlen
+        'H', 'e', 'l', 'l', 'o', ' ', 'w', 'o', 'r', 'l', 'd', 0x0a, // non compressed data
+        0xd5, 0xe0, 0x39, 0xb7, // gzip footer: len
+        0x0c, 0x00, 0x00, 0x00, // gzip footer: size
+    };
+
+    var fb = std.io.fixedBufferStream(&data);
+    var il = inflate(fb.reader());
+    try il.parse();
+    try testing.expectEqualStrings("Hello world\n", il.sw.read());
+}
 
 test "inflate fixed code block (block type 1)" {
     const data = [_]u8{
