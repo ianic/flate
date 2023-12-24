@@ -224,27 +224,7 @@ fn Inflate(comptime ReaderType: type) type {
                 },
             }
         }
-
-        fn printLengthDistance(self: *Self, code: u16) !void {
-            const length = try self.decodeLength(code);
-            const distance = try self.decodeDistance(try self.readBits(u16, 5));
-
-            std.debug.print(" code: {d}, length: {d}", .{ code, length });
-            std.debug.print(" distance: {d}", .{distance});
-        }
     };
-}
-
-fn printLiteral(lit: u8) void {
-    // if (code >= 144) {
-    //     std.debug.print(" code: {b:0>9}", .{code});
-    // } else {
-    //     std.debug.print(" code: {b:0>8} ", .{code});
-    // }
-    std.debug.print(" literal: 0x{x}", .{lit});
-    if (std.ascii.isPrint(lit)) {
-        std.debug.print(" {c}", .{lit});
-    }
 }
 
 fn backwardLength(c: u16) BackwardLength {
@@ -515,5 +495,4 @@ test "SlidingWindow circular buffer" {
     try testing.expectEqual(@as(usize, 65536 - 200), sw.free());
 
     try testing.expectEqual(@as(usize, 200), sw.read().len); // read the rest
-
 }
