@@ -24,15 +24,12 @@ fn Inflate(comptime ReaderType: type) type {
             };
         }
 
-        fn readByte(self: *Self) !u8 {
+        inline fn readByte(self: *Self) !u8 {
             return self.br.readBitsNoEof(u8, 8);
         }
 
-        fn skipBytes(self: *Self, n: usize) !void {
-            var i = n;
-            while (i > 0) : (i -= 1) {
-                _ = try self.readByte();
-            }
+        inline fn skipBytes(self: *Self, n: usize) !void {
+            for (0..n) |_| _ = try self.readByte();
         }
 
         fn gzipHeader(self: *Self) !void {
@@ -88,33 +85,38 @@ fn Inflate(comptime ReaderType: type) type {
         fn fixedCodesBlock(self: *Self) !void {
             while (true) {
                 const code7 = try self.readLiteralBits(u7, 7);
-                std.debug.print("\ncode7: {b:0<7}", .{code7});
+                // std.debug.print("\ncode7: {b:0<7}", .{code7});
 
                 if (code7 < 0b0010_111) { // 7 bits, 256-279, codes 0000_000 - 0010_111
                     if (code7 == 0) break; // end of block code 256
                     const code: u16 = @as(u16, code7) + 256;
-                    try self.printLengthDistance(code);
+                    try self.fixedDistanceCode(code);
                 } else if (code7 < 0b1011_111) { // 8 bits, 0-143, codes 0011_0000 through 1011_1111
                     const lit: u8 = (@as(u8, code7 - 0b0011_000) << 1) + try self.readBits(u1, 1);
-                    printLiteral(lit);
+                    self.sw.write(lit);
                 } else if (code7 <= 0b1100_011) { // 8 bit, 280-287, codes 1100_0000 - 1100_0111
                     const code: u16 = (@as(u16, code7 - 0b1100011) << 1) + try self.readBits(u1, 1) + 280;
-                    try self.printLengthDistance(code);
+                    try self.fixedDistanceCode(code);
                 } else { // 9 bit, 144-255, codes 1_1001_0000 - 1_1111_1111
                     const lit: u8 = (@as(u8, code7 - 0b1100_100) << 2) + try self.readLiteralBits(u2, 2) + 144;
-                    printLiteral(lit);
+                    self.sw.write(lit);
                 }
             }
         }
 
+        // Handles fixed block non literal (length) code.
+        // Length code is followed by 5 bits of distance code.
+        fn fixedDistanceCode(self: *Self, code: u16) !void {
+            const length = try self.decodeLength(code);
+            const distance = try self.decodeDistance(try self.readBits(u16, 5));
+            self.sw.copy(length, distance);
+        }
+
         fn dynamicCodesBlock(self: *Self) !void {
-            // number of ll code entries present - 257
-            const hlit = try self.readBits(u16, 5) + 257;
-            // number of distance code entries - 1
-            const hdist = try self.readBits(u16, 5) + 1;
-            // hclen + 4 code lenths are encoded
-            const hclen = try self.readBits(u8, 4) + 4;
-            std.debug.print("hlit: {d}, hdist: {d}, hclen: {d}\n", .{ hlit, hdist, hclen });
+            const hlit = try self.readBits(u16, 5) + 257; // number of ll code entries present - 257
+            const hdist = try self.readBits(u16, 5) + 1; // number of distance code entries - 1
+            const hclen = try self.readBits(u8, 4) + 4; // hclen + 4 code lenths are encoded
+            // std.debug.print("hlit: {d}, hdist: {d}, hclen: {d}\n", .{ hlit, hdist, hclen });
 
             // lengths for code lengths
             var cl_l = [_]u4{0} ** 19;
@@ -131,7 +133,7 @@ fn Inflate(comptime ReaderType: type) type {
                 const c = try cl_h.next(self, Self.readBit);
                 pos += try self.dynamicCodeLength(c, &lit_l, pos);
             }
-            //std.debug.print("litl {d} {d}\n", .{ pos, lit_l });
+            // std.debug.print("litl {d} {d}\n", .{ pos, lit_l });
 
             // distance code lenths
             var dst_l = [_]u4{0} ** (30);
@@ -140,24 +142,26 @@ fn Inflate(comptime ReaderType: type) type {
                 const c = try cl_h.next(self, Self.readBit);
                 pos += try self.dynamicCodeLength(c, &dst_l, pos);
             }
-            //std.debug.print("dstl {d} {d}\n", .{ pos, dst_l });
+            // std.debug.print("dstl {d} {d}\n", .{ pos, dst_l });
 
             var lit_h = Huffman(285).init(&lit_l);
             var dst_h = Huffman(30).init(&dst_l);
             // std.debug.print("litl {}\n", .{lit_h});
             while (true) {
                 const code = try lit_h.next(self, Self.readBit);
-                std.debug.print("symbol {d}\n", .{code});
+                // std.debug.print("symbol {d}\n", .{code});
                 if (code == 256) return; // end of block
                 if (code > 256) {
                     // decode backward pointer <length, distance>
                     const length = try self.decodeLength(code);
                     const ds = try dst_h.next(self, Self.readBit); // distance symbol
                     const distance = try self.decodeDistance(ds);
+                    self.sw.copy(length, distance);
 
-                    std.debug.print("length: {d}, distance: {d}\n", .{ length, distance });
+                    // std.debug.print("length: {d}, distance: {d}\n", .{ length, distance });
                 } else {
                     // literal
+                    self.sw.write(@intCast(code));
                 }
             }
         }
@@ -294,18 +298,34 @@ const backward_distances = [_]BackwardDistance{
     .{ .code = 28, .extra_bits = 13, .base_distance = 16385 },
 };
 
-test "block2 example" {
-    // zig fmt: off
+test "inflate fixed code block (block type 1)" {
     const data = [_]u8{
-        0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03,
-        0x3d, 0xc6, 0x39, 0x11, 0x00, 0x00, 0x0c, 0x02, 0x30, 0x2b, 0xb5, 0x52, 0x1e, 0xff, 0x96, 0x38, 0x16, 0x96, 0x5c, 0x1e, 0x94, 0xcb, 0x6d, 0x01,
-        0x17, 0x1c, 0x39, 0xb4, 0x13, 0x00, 0x00, 0x00,
+        0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x03, // gzip header (10 bytes)
+        0xf3, 0x48, 0xcd, 0xc9, 0xc9, 0x57, 0x28, 0xcf, // deflate data block type 1
+        0x2f, 0xca, 0x49, 0xe1, 0x02, 0x00,
+        0xd5, 0xe0, 0x39, 0xb7, 0x0c, 0x00, 0x00, 0x00, // gzip footer (chksum, len)
     };
-    // zig fmt: on
 
-    var fbs = std.io.fixedBufferStream(&data);
-    var gs = inflate(fbs.reader());
-    try gs.parse();
+    var fb = std.io.fixedBufferStream(&data);
+    var il = inflate(fb.reader());
+    try il.parse();
+    try testing.expectEqualStrings("Hello world\n", il.sw.read());
+}
+
+// example from: https://youtu.be/SJPvNi4HrWQ?list=PLU4IQLU9e_OrY8oASHx0u3IXAL9TOdidm&t=8015
+test "inflate dynamic block (block type 2)" {
+    const data = [_]u8{
+        0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, // gzip header (10 bytes)
+        0x3d, 0xc6, 0x39, 0x11, 0x00, 0x00, 0x0c, 0x02, // deflate data block type 2
+        0x30, 0x2b, 0xb5, 0x52, 0x1e, 0xff, 0x96, 0x38,
+        0x16, 0x96, 0x5c, 0x1e, 0x94, 0xcb, 0x6d, 0x01,
+        0x17, 0x1c, 0x39, 0xb4, 0x13, 0x00, 0x00, 0x00, // gzip footer (chksum, len)
+    };
+
+    var fb = std.io.fixedBufferStream(&data);
+    var il = inflate(fb.reader());
+    try il.parse();
+    try testing.expectEqualStrings("ABCDEABCD ABCDEABCD", il.sw.read());
 }
 
 const SlidingWindow = struct {
@@ -437,6 +457,6 @@ test "SlidingWindow circular buffer" {
     try testing.expectEqual(@as(usize, 65536), sw.rpos);
     try testing.expectEqual(@as(usize, 65536 - 200), sw.free());
 
-    try testing.expectEqual(@as(usize, 200), sw.read().len); // read to the rest
+    try testing.expectEqual(@as(usize, 200), sw.read().len); // read the rest
 
 }
