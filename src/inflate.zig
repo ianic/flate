@@ -16,6 +16,15 @@ fn Inflate(comptime ReaderType: type) type {
         br: BitReaderType,
         sw: SlidingWindow = .{},
 
+        // dynamic block huffman codes for literals and distances
+        lit_h: Huffman(285) = undefined,
+        dst_h: Huffman(30) = undefined,
+
+        // current read state
+        bfinal: u1 = 0,
+        block_type: u2 = no_block,
+
+        const no_block = 0b11;
         const Self = @This();
 
         pub fn init(br: ReaderType) Self {
@@ -67,20 +76,20 @@ fn Inflate(comptime ReaderType: type) type {
             while (true) {
                 const bfinal = try self.readBits(u1, 1);
                 const block_type = try self.readBits(u2, 2);
-                switch (block_type) {
-                    0 => {
-                        self.br.alignToByte(); // skip 5 bits
-                        try self.nonCompressedBlock();
-                    },
+                _ = switch (block_type) {
+                    0 => try self.nonCompressedBlock(),
                     1 => try self.fixedCodesBlock(),
-                    2 => try self.dynamicCodesBlock(),
+                    2 => {
+                        try self.initDynamicBlock();
+                        _ = try self.dynamicBlock();
+                    },
                     else => unreachable,
-                }
+                };
                 if (bfinal == 1) break;
             }
         }
 
-        pub fn testGzip(self: *Self) ![]const u8 {
+        fn testGzip(self: *Self) ![]const u8 {
             try self.gzipHeader();
             try self.deflate();
             const buf = self.sw.read();
@@ -106,22 +115,31 @@ fn Inflate(comptime ReaderType: type) type {
             if (size != self.sw.size()) return error.GzipFooterSize;
         }
 
-        fn nonCompressedBlock(self: *Self) !void {
+        fn nonCompressedBlock(self: *Self) !bool {
+            self.br.alignToByte(); // skip 5 bits
             const len = try self.readBits(u16, 16);
             const nlen = try self.readBits(u16, 16);
+
             if (len != ~nlen) return error.DeflateWrongNlen;
             for (0..len) |_| {
                 self.sw.write(try self.readByte());
             }
+            return true;
         }
 
-        fn fixedCodesBlock(self: *Self) !void {
-            while (true) {
+        fn windowFull(self: *Self) bool {
+            // 258 is largest backreference length.
+            // That much bytes can be produced in single step.
+            return self.sw.free() < 258;
+        }
+
+        fn fixedCodesBlock(self: *Self) !bool {
+            while (!self.windowFull()) {
                 const code7 = try self.readLiteralBits(u7, 7);
                 // std.debug.print("\ncode7: {b:0<7}", .{code7});
 
                 if (code7 < 0b0010_111) { // 7 bits, 256-279, codes 0000_000 - 0010_111
-                    if (code7 == 0) break; // end of block code 256
+                    if (code7 == 0) return true; // end of block code 256
                     const code: u16 = @as(u16, code7) + 256;
                     try self.fixedDistanceCode(code);
                 } else if (code7 < 0b1011_111) { // 8 bits, 0-143, codes 0011_0000 through 1011_1111
@@ -135,6 +153,7 @@ fn Inflate(comptime ReaderType: type) type {
                     self.sw.write(lit);
                 }
             }
+            return false;
         }
 
         // Handles fixed block non literal (length) code.
@@ -145,7 +164,7 @@ fn Inflate(comptime ReaderType: type) type {
             self.sw.copy(length, distance);
         }
 
-        fn dynamicCodesBlock(self: *Self) !void {
+        fn initDynamicBlock(self: *Self) !void {
             const hlit = try self.readBits(u16, 5) + 257; // number of ll code entries present - 257
             const hdist = try self.readBits(u16, 5) + 1; // number of distance code entries - 1
             const hclen = try self.readBits(u8, 4) + 4; // hclen + 4 code lenths are encoded
@@ -177,17 +196,20 @@ fn Inflate(comptime ReaderType: type) type {
             }
             // std.debug.print("dstl {d} {d}\n", .{ pos, dst_l });
 
-            var lit_h = Huffman(285).init(&lit_l);
-            var dst_h = Huffman(30).init(&dst_l);
+            self.lit_h = Huffman(285).init(&lit_l);
+            self.dst_h = Huffman(30).init(&dst_l);
+        }
+
+        fn dynamicBlock(self: *Self) !bool {
             // std.debug.print("litl {}\n", .{lit_h});
-            while (true) {
-                const code = try lit_h.next(self, Self.readBit);
+            while (!self.windowFull()) {
+                const code = try self.lit_h.next(self, Self.readBit);
                 // std.debug.print("symbol {d}\n", .{code});
-                if (code == 256) return; // end of block
+                if (code == 256) return true; // end of block
                 if (code > 256) {
                     // decode backward pointer <length, distance>
                     const length = try self.decodeLength(code);
-                    const ds = try dst_h.next(self, Self.readBit); // distance symbol
+                    const ds = try self.dst_h.next(self, Self.readBit); // distance symbol
                     const distance = try self.decodeDistance(ds);
                     self.sw.copy(length, distance);
 
@@ -197,6 +219,7 @@ fn Inflate(comptime ReaderType: type) type {
                     self.sw.write(@intCast(code));
                 }
             }
+            return false;
         }
 
         // Decode code length symbol to code length.
@@ -222,6 +245,32 @@ fn Inflate(comptime ReaderType: type) type {
                     lens[pos] = @intCast(code);
                     return 1;
                 },
+            }
+        }
+
+        pub fn read(self: *Self) ![]const u8 {
+            while (true) {
+                const buf = self.sw.read();
+                if (buf.len > 0) return buf;
+
+                if (self.block_type == no_block) {
+                    if (self.bfinal == 1) {
+                        try self.gzipFooter();
+                        return buf;
+                    }
+
+                    self.bfinal = try self.readBits(u1, 1);
+                    self.block_type = try self.readBits(u2, 2);
+                    if (self.block_type == 2)
+                        try self.initDynamicBlock();
+                }
+                const done = switch (self.block_type) {
+                    0 => try self.nonCompressedBlock(),
+                    1 => try self.fixedCodesBlock(),
+                    2 => try self.dynamicBlock(),
+                    else => unreachable,
+                };
+                if (done) self.block_type = no_block;
             }
         }
     };
@@ -322,7 +371,11 @@ test "inflate non-compressed block (block type 0)" {
 
     var fb = std.io.fixedBufferStream(&data);
     var il = inflate(fb.reader());
-    try testing.expectEqualStrings("Hello world\n", try il.testGzip());
+    try il.gzipHeader();
+    try testing.expectEqualStrings("Hello world\n", try il.read());
+    try testing.expect((try il.read()).len == 0);
+
+    // try testing.expectEqualStrings("Hello world\n", try il.testGzip());
 }
 
 test "inflate fixed code block (block type 1)" {
