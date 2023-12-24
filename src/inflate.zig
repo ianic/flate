@@ -360,6 +360,53 @@ const backward_distances = [_]BackwardDistance{
     .{ .code = 28, .extra_bits = 13, .base_distance = 16385 },
 };
 
+test "inflate test cases" {
+    const cases = [_]struct {
+        in: []const u8,
+        out: []const u8,
+    }{
+        // non compressed block (type 0)
+        .{
+            .in = &[_]u8{
+                0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, // gzip header (10 bytes)
+                0b0000_0001, 0b0000_1100, 0x00, 0b1111_0011, 0xff, // deflate fixed buffer header len, nlen
+                'H', 'e', 'l', 'l', 'o', ' ', 'w', 'o', 'r', 'l', 'd', 0x0a, // non compressed data
+                0xd5, 0xe0, 0x39, 0xb7, // gzip footer: checksum
+                0x0c, 0x00, 0x00, 0x00, // gzip footer: size
+            },
+            .out = "Hello world\n",
+        },
+        // fixed code block (type 1)
+        .{
+            .in = &[_]u8{
+                0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x03, // gzip header (10 bytes)
+                0xf3, 0x48, 0xcd, 0xc9, 0xc9, 0x57, 0x28, 0xcf, // deflate data block type 1
+                0x2f, 0xca, 0x49, 0xe1, 0x02, 0x00,
+                0xd5, 0xe0, 0x39, 0xb7, 0x0c, 0x00, 0x00, 0x00, // gzip footer (chksum, len)
+            },
+            .out = "Hello world\n",
+        },
+        // dynamic block (type 2)
+        .{
+            .in = &[_]u8{
+                0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, // gzip header (10 bytes)
+                0x3d, 0xc6, 0x39, 0x11, 0x00, 0x00, 0x0c, 0x02, // deflate data block type 2
+                0x30, 0x2b, 0xb5, 0x52, 0x1e, 0xff, 0x96, 0x38,
+                0x16, 0x96, 0x5c, 0x1e, 0x94, 0xcb, 0x6d, 0x01,
+                0x17, 0x1c, 0x39, 0xb4, 0x13, 0x00, 0x00, 0x00, // gzip footer (chksum, len)
+            },
+            .out = "ABCDEABCD ABCDEABCD",
+        },
+    };
+    for (cases) |c| {
+        var fb = std.io.fixedBufferStream(c.in);
+        var il = inflate(fb.reader());
+        try il.gzipHeader();
+        try testing.expectEqualStrings(c.out, try il.read());
+        try testing.expect((try il.read()).len == 0);
+    }
+}
+
 test "inflate non-compressed block (block type 0)" {
     const data = [_]u8{
         0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, // gzip header (10 bytes)
