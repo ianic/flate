@@ -2,6 +2,7 @@ const std = @import("std");
 const assert = std.debug.assert;
 const testing = std.testing;
 const Huffman = @import("huffman.zig").Huffman;
+const inflate = @import("inflate.zig").inflate;
 
 // zig fmt: off
     const dataBlockType01 = [_]u8{
@@ -20,6 +21,18 @@ const Huffman = @import("huffman.zig").Huffman;
 // zig fmt: on
 
 pub fn main() !void {
+    const stdin = std.io.getStdIn();
+    const stdout = std.io.getStdOut();
+    var il = inflate(stdin.reader());
+
+    while (true) {
+        const buf = try il.read();
+        if (buf.len == 0) return;
+        try stdout.writeAll(buf);
+    }
+}
+
+pub fn _main() !void {
     // var fbs = std.io.fixedBufferStream(&dataBlockType01);
     // try gzStat(fbs.reader());
 

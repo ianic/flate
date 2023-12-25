@@ -13,28 +13,36 @@ pub fn inflate(reader: anytype) Inflate(@TypeOf(reader)) {
 fn Inflate(comptime ReaderType: type) type {
     const BitReaderType = std.io.BitReader(.little, ReaderType);
     return struct {
-        br: BitReaderType,
-        sw: SlidingWindow = .{},
+        rdr: BitReaderType,
+        win: SlidingWindow = .{},
 
         // dynamic block huffman codes for literals and distances
-        lit_h: Huffman(285) = undefined,
+        lit_h: Huffman(286) = undefined,
         dst_h: Huffman(30) = undefined,
 
         // current read state
         bfinal: u1 = 0,
-        block_type: u2 = no_block,
+        block_type: u2 = 0b11,
+        state: ReadState = .gzip_header,
 
-        const no_block = 0b11;
+        const ReadState = enum {
+            gzip_header,
+            deflate_header,
+            deflate_block,
+            gzip_footer,
+            end,
+        };
+
         const Self = @This();
 
-        pub fn init(br: ReaderType) Self {
+        pub fn init(rt: ReaderType) Self {
             return .{
-                .br = BitReaderType.init(br),
+                .rdr = BitReaderType.init(rt),
             };
         }
 
         inline fn readByte(self: *Self) !u8 {
-            return self.br.readBitsNoEof(u8, 8);
+            return self.rdr.readBitsNoEof(u8, 8);
         }
 
         inline fn skipBytes(self: *Self, n: usize) !void {
@@ -42,16 +50,16 @@ fn Inflate(comptime ReaderType: type) type {
         }
 
         fn readBit(self: *Self) anyerror!u1 {
-            return try self.br.readBitsNoEof(u1, 1);
+            return try self.rdr.readBitsNoEof(u1, 1);
         }
 
         inline fn readBits(self: *Self, comptime U: type, bits: usize) !U {
             if (bits == 0) return 0;
-            return try self.br.readBitsNoEof(U, bits);
+            return try self.rdr.readBitsNoEof(U, bits);
         }
 
         inline fn readLiteralBits(self: *Self, comptime U: type, bits: usize) !U {
-            return @bitReverse(try self.br.readBitsNoEof(U, bits));
+            return @bitReverse(try self.rdr.readBitsNoEof(U, bits));
         }
 
         inline fn decodeLength(self: *Self, code: u16) !u16 {
@@ -66,37 +74,6 @@ fn Inflate(comptime ReaderType: type) type {
             return bd.base_distance + try self.readBits(u16, bd.extra_bits);
         }
 
-        pub fn gzip(self: *Self) !void {
-            try self.gzipHeader();
-            try self.deflate();
-            try self.gzipFooter();
-        }
-
-        pub fn deflate(self: *Self) !void {
-            while (true) {
-                const bfinal = try self.readBits(u1, 1);
-                const block_type = try self.readBits(u2, 2);
-                _ = switch (block_type) {
-                    0 => try self.nonCompressedBlock(),
-                    1 => try self.fixedCodesBlock(),
-                    2 => {
-                        try self.initDynamicBlock();
-                        _ = try self.dynamicBlock();
-                    },
-                    else => unreachable,
-                };
-                if (bfinal == 1) break;
-            }
-        }
-
-        fn testGzip(self: *Self) ![]const u8 {
-            try self.gzipHeader();
-            try self.deflate();
-            const buf = self.sw.read();
-            try self.gzipFooter();
-            return buf;
-        }
-
         fn gzipHeader(self: *Self) !void {
             const magic1 = try self.readByte();
             const magic2 = try self.readByte();
@@ -107,22 +84,22 @@ fn Inflate(comptime ReaderType: type) type {
         }
 
         fn gzipFooter(self: *Self) !void {
-            self.br.alignToByte();
+            self.rdr.alignToByte();
             const chksum = try self.readBits(u32, 32);
             const size = try self.readBits(u32, 32);
 
-            if (chksum != self.sw.chksum()) return error.GzipFooterChecksum;
-            if (size != self.sw.size()) return error.GzipFooterSize;
+            if (chksum != self.win.chksum()) return error.GzipFooterChecksum;
+            if (size != self.win.size()) return error.GzipFooterSize;
         }
 
         fn nonCompressedBlock(self: *Self) !bool {
-            self.br.alignToByte(); // skip 5 bits
+            self.rdr.alignToByte(); // skip 5 bits
             const len = try self.readBits(u16, 16);
             const nlen = try self.readBits(u16, 16);
 
             if (len != ~nlen) return error.DeflateWrongNlen;
             for (0..len) |_| {
-                self.sw.write(try self.readByte());
+                self.win.write(try self.readByte());
             }
             return true;
         }
@@ -130,10 +107,10 @@ fn Inflate(comptime ReaderType: type) type {
         fn windowFull(self: *Self) bool {
             // 258 is largest backreference length.
             // That much bytes can be produced in single step.
-            return self.sw.free() < 258;
+            return self.win.free() < 258 + 1;
         }
 
-        fn fixedCodesBlock(self: *Self) !bool {
+        fn fixedBlock(self: *Self) !bool {
             while (!self.windowFull()) {
                 const code7 = try self.readLiteralBits(u7, 7);
                 // std.debug.print("\ncode7: {b:0<7}", .{code7});
@@ -144,13 +121,13 @@ fn Inflate(comptime ReaderType: type) type {
                     try self.fixedDistanceCode(code);
                 } else if (code7 < 0b1011_111) { // 8 bits, 0-143, codes 0011_0000 through 1011_1111
                     const lit: u8 = (@as(u8, code7 - 0b0011_000) << 1) + try self.readBits(u1, 1);
-                    self.sw.write(lit);
+                    self.win.write(lit);
                 } else if (code7 <= 0b1100_011) { // 8 bit, 280-287, codes 1100_0000 - 1100_0111
                     const code: u16 = (@as(u16, code7 - 0b1100011) << 1) + try self.readBits(u1, 1) + 280;
                     try self.fixedDistanceCode(code);
                 } else { // 9 bit, 144-255, codes 1_1001_0000 - 1_1111_1111
                     const lit: u8 = (@as(u8, code7 - 0b1100_100) << 2) + try self.readLiteralBits(u2, 2) + 144;
-                    self.sw.write(lit);
+                    self.win.write(lit);
                 }
             }
             return false;
@@ -161,7 +138,7 @@ fn Inflate(comptime ReaderType: type) type {
         fn fixedDistanceCode(self: *Self, code: u16) !void {
             const length = try self.decodeLength(code);
             const distance = try self.decodeDistance(try self.readBits(u16, 5));
-            self.sw.copy(length, distance);
+            self.win.copy(length, distance);
         }
 
         fn initDynamicBlock(self: *Self) !void {
@@ -179,7 +156,7 @@ fn Inflate(comptime ReaderType: type) type {
             var cl_h = Huffman(19).init(&cl_l);
 
             // literal code lengths
-            var lit_l = [_]u4{0} ** (285);
+            var lit_l = [_]u4{0} ** (286);
             var pos: usize = 0;
             while (pos < hlit) {
                 const c = try cl_h.next(self, Self.readBit);
@@ -196,7 +173,7 @@ fn Inflate(comptime ReaderType: type) type {
             }
             // std.debug.print("dstl {d} {d}\n", .{ pos, dst_l });
 
-            self.lit_h = Huffman(285).init(&lit_l);
+            self.lit_h = Huffman(286).init(&lit_l);
             self.dst_h = Huffman(30).init(&dst_l);
         }
 
@@ -211,12 +188,12 @@ fn Inflate(comptime ReaderType: type) type {
                     const length = try self.decodeLength(code);
                     const ds = try self.dst_h.next(self, Self.readBit); // distance symbol
                     const distance = try self.decodeDistance(ds);
-                    self.sw.copy(length, distance);
+                    self.win.copy(length, distance);
 
-                    // std.debug.print("length: {d}, distance: {d}\n", .{ length, distance });
+                    //  std.debug.print("length: {d}, distance: {d}\n", .{ length, distance });
                 } else {
                     // literal
-                    self.sw.write(@intCast(code));
+                    self.win.write(@intCast(code));
                 }
             }
             return false;
@@ -248,29 +225,43 @@ fn Inflate(comptime ReaderType: type) type {
             }
         }
 
+        // Returns decompressed data from internal sliding window buffer.
+        // Returned buffer can be any length between 0 and 65536 bytes,
+        // 0 len means end of stream reached.
         pub fn read(self: *Self) ![]const u8 {
             while (true) {
-                const buf = self.sw.read();
+                const buf = self.win.read();
                 if (buf.len > 0) return buf;
 
-                if (self.block_type == no_block) {
-                    if (self.bfinal == 1) {
+                switch (self.state) {
+                    .gzip_header => {
+                        try self.gzipHeader();
+                        self.state = .deflate_header;
+                    },
+                    .deflate_header => {
+                        self.bfinal = try self.readBits(u1, 1);
+                        self.block_type = try self.readBits(u2, 2);
+                        self.state = .deflate_block;
+                        if (self.block_type == 2) try self.initDynamicBlock();
+                    },
+                    .deflate_block => {
+                        const done = switch (self.block_type) {
+                            0 => try self.nonCompressedBlock(),
+                            1 => try self.fixedBlock(),
+                            2 => try self.dynamicBlock(),
+                            else => unreachable,
+                        };
+                        if (done)
+                            self.state = if (self.bfinal == 1) .gzip_footer else .deflate_header;
+                    },
+                    .gzip_footer => {
                         try self.gzipFooter();
+                        self.state = .end;
+                    },
+                    .end => {
                         return buf;
-                    }
-
-                    self.bfinal = try self.readBits(u1, 1);
-                    self.block_type = try self.readBits(u2, 2);
-                    if (self.block_type == 2)
-                        try self.initDynamicBlock();
+                    },
                 }
-                const done = switch (self.block_type) {
-                    0 => try self.nonCompressedBlock(),
-                    1 => try self.fixedCodesBlock(),
-                    2 => try self.dynamicBlock(),
-                    else => unreachable,
-                };
-                if (done) self.block_type = no_block;
             }
         }
     };
@@ -358,6 +349,7 @@ const backward_distances = [_]BackwardDistance{
     .{ .code = 26, .extra_bits = 12, .base_distance = 8193 },
     .{ .code = 27, .extra_bits = 12, .base_distance = 12289 },
     .{ .code = 28, .extra_bits = 13, .base_distance = 16385 },
+    .{ .code = 29, .extra_bits = 13, .base_distance = 24577 },
 };
 
 test "inflate test cases" {
@@ -401,56 +393,9 @@ test "inflate test cases" {
     for (cases) |c| {
         var fb = std.io.fixedBufferStream(c.in);
         var il = inflate(fb.reader());
-        try il.gzipHeader();
         try testing.expectEqualStrings(c.out, try il.read());
         try testing.expect((try il.read()).len == 0);
     }
-}
-
-test "inflate non-compressed block (block type 0)" {
-    const data = [_]u8{
-        0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, // gzip header (10 bytes)
-        0b0000_0001, 0b0000_1100, 0x00, 0b1111_0011, 0xff, // deflate fixed buffer header len, nlen
-        'H', 'e', 'l', 'l', 'o', ' ', 'w', 'o', 'r', 'l', 'd', 0x0a, // non compressed data
-        0xd5, 0xe0, 0x39, 0xb7, // gzip footer: checksum
-        0x0c, 0x00, 0x00, 0x00, // gzip footer: size
-    };
-
-    var fb = std.io.fixedBufferStream(&data);
-    var il = inflate(fb.reader());
-    try il.gzipHeader();
-    try testing.expectEqualStrings("Hello world\n", try il.read());
-    try testing.expect((try il.read()).len == 0);
-
-    // try testing.expectEqualStrings("Hello world\n", try il.testGzip());
-}
-
-test "inflate fixed code block (block type 1)" {
-    const data = [_]u8{
-        0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x03, // gzip header (10 bytes)
-        0xf3, 0x48, 0xcd, 0xc9, 0xc9, 0x57, 0x28, 0xcf, // deflate data block type 1
-        0x2f, 0xca, 0x49, 0xe1, 0x02, 0x00,
-        0xd5, 0xe0, 0x39, 0xb7, 0x0c, 0x00, 0x00, 0x00, // gzip footer (chksum, len)
-    };
-
-    var fb = std.io.fixedBufferStream(&data);
-    var il = inflate(fb.reader());
-    try testing.expectEqualStrings("Hello world\n", try il.testGzip());
-}
-
-// example from: https://youtu.be/SJPvNi4HrWQ?list=PLU4IQLU9e_OrY8oASHx0u3IXAL9TOdidm&t=8015
-test "inflate dynamic block (block type 2)" {
-    const data = [_]u8{
-        0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, // gzip header (10 bytes)
-        0x3d, 0xc6, 0x39, 0x11, 0x00, 0x00, 0x0c, 0x02, // deflate data block type 2
-        0x30, 0x2b, 0xb5, 0x52, 0x1e, 0xff, 0x96, 0x38,
-        0x16, 0x96, 0x5c, 0x1e, 0x94, 0xcb, 0x6d, 0x01,
-        0x17, 0x1c, 0x39, 0xb4, 0x13, 0x00, 0x00, 0x00, // gzip footer (chksum, len)
-    };
-
-    var fb = std.io.fixedBufferStream(&data);
-    var il = inflate(fb.reader());
-    try testing.expectEqualStrings("ABCDEABCD ABCDEABCD", try il.testGzip());
 }
 
 const SlidingWindow = struct {
@@ -475,7 +420,7 @@ const SlidingWindow = struct {
     pub fn copy(self: *SlidingWindow, length: u16, distance: u16) void {
         for (0..length) |_| {
             assert(self.wpos - self.rpos < mask);
-            self.buffer[self.wpos] = self.buffer[self.wpos - distance];
+            self.buffer[self.wpos & mask] = self.buffer[(self.wpos - distance) & mask];
             self.wpos += 1;
         }
     }
@@ -595,4 +540,36 @@ test "SlidingWindow circular buffer" {
     try testing.expectEqual(@as(usize, 65536 - 200), sw.free());
 
     try testing.expectEqual(@as(usize, 200), sw.read().len); // read the rest
+}
+
+test "SlidingWindow write over border" {
+    var sw: SlidingWindow = .{};
+    sw.wpos = sw.buffer.len - 15;
+    sw.rpos = sw.wpos;
+
+    sw.writeAll("0123456789");
+    sw.writeAll("abcdefghij");
+
+    try testing.expectEqual(sw.buffer.len + 5, sw.wpos);
+    try testing.expectEqual(sw.buffer.len - 15, sw.rpos);
+
+    try testing.expectEqualStrings("0123456789abcde", sw.read());
+    try testing.expectEqualStrings("fghij", sw.read());
+
+    try testing.expect(sw.wpos == sw.rpos);
+}
+
+test "SlidingWindow copy over border" {
+    var sw: SlidingWindow = .{};
+    sw.wpos = sw.buffer.len - 15;
+    sw.rpos = sw.wpos;
+
+    sw.writeAll("0123456789");
+    sw.copy(15, 5);
+
+    try testing.expectEqualStrings("012345678956789", sw.read());
+    try testing.expectEqualStrings("5678956789", sw.read());
+
+    sw.copy(20, 25);
+    try testing.expectEqualStrings("01234567895678956789", sw.read());
 }
