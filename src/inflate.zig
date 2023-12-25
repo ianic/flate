@@ -403,8 +403,8 @@ const SlidingWindow = struct {
     const buffer_len = mask + 1; // 64K buffer
 
     buffer: [buffer_len]u8 = undefined,
-    wpos: usize = 0, // write position
-    rpos: usize = 0, // read position
+    wp: usize = 0, // write position
+    rp: usize = 0, // read position
     crc: std.hash.Crc32 = std.hash.Crc32.init(),
 
     pub fn writeAll(self: *SlidingWindow, buf: []const u8) void {
@@ -412,16 +412,16 @@ const SlidingWindow = struct {
     }
 
     pub fn write(self: *SlidingWindow, b: u8) void {
-        assert(self.wpos - self.rpos < mask);
-        self.buffer[self.wpos & mask] = b;
-        self.wpos += 1;
+        assert(self.wp - self.rp < mask);
+        self.buffer[self.wp & mask] = b;
+        self.wp += 1;
     }
 
     pub fn copy(self: *SlidingWindow, length: u16, distance: u16) void {
         for (0..length) |_| {
-            assert(self.wpos - self.rpos < mask);
-            self.buffer[self.wpos & mask] = self.buffer[(self.wpos - distance) & mask];
-            self.wpos += 1;
+            assert(self.wp - self.rp < mask);
+            self.buffer[self.wp & mask] = self.buffer[(self.wp - distance) & mask];
+            self.wp += 1;
         }
     }
 
@@ -431,7 +431,7 @@ const SlidingWindow = struct {
 
     pub fn readAtMost(self: *SlidingWindow, max: usize) []const u8 {
         const rb = self.readBlock(max);
-        defer self.rpos += rb.len;
+        defer self.rp += rb.len;
         const buf = self.buffer[rb.head..rb.tail];
         self.crc.update(buf);
         return buf;
@@ -445,8 +445,8 @@ const SlidingWindow = struct {
 
     // Returns position of continous read block data.
     inline fn readBlock(self: *SlidingWindow, max: usize) ReadBlock {
-        const r = self.rpos & mask;
-        const w = self.wpos & mask;
+        const r = self.rp & mask;
+        const w = self.wp & mask;
         const n = @min(
             max,
             if (w >= r) w - r else buffer_len - r,
@@ -459,7 +459,7 @@ const SlidingWindow = struct {
     }
 
     pub fn free(self: *SlidingWindow) usize {
-        return buffer_len - (self.wpos - self.rpos);
+        return buffer_len - (self.wp - self.rp);
     }
 
     pub fn chksum(self: *SlidingWindow) u32 {
@@ -468,7 +468,7 @@ const SlidingWindow = struct {
 
     // bytes written
     pub fn size(self: *SlidingWindow) u32 {
-        return @intCast(self.wpos);
+        return @intCast(self.wp);
     }
 };
 
@@ -499,9 +499,9 @@ test "SlidingWindow readAtMost" {
     sw.writeAll("0123456789");
     sw.copy(50, 10);
 
-    try testing.expectEqualStrings("0123456789" ** 6, sw.buffer[sw.rpos..sw.wpos]);
+    try testing.expectEqualStrings("0123456789" ** 6, sw.buffer[sw.rp..sw.wp]);
     for (0..6) |i| {
-        try testing.expectEqual(i * 10, sw.rpos);
+        try testing.expectEqual(i * 10, sw.rp);
         try testing.expectEqualStrings("0123456789", sw.readAtMost(10));
     }
     try testing.expectEqualStrings("", sw.readAtMost(10));
@@ -513,20 +513,20 @@ test "SlidingWindow circular buffer" {
 
     const data = "0123456789abcdef" ** (1024 / 16);
     sw.writeAll(data);
-    try testing.expectEqual(@as(usize, 0), sw.rpos);
-    try testing.expectEqual(@as(usize, 1024), sw.wpos);
+    try testing.expectEqual(@as(usize, 0), sw.rp);
+    try testing.expectEqual(@as(usize, 1024), sw.wp);
     try testing.expectEqual(@as(usize, 1024 * 63), sw.free());
 
     sw.copy(62 * 1024, 1024);
-    try testing.expectEqual(@as(usize, 0), sw.rpos);
-    try testing.expectEqual(@as(usize, 63 * 1024), sw.wpos);
+    try testing.expectEqual(@as(usize, 0), sw.rp);
+    try testing.expectEqual(@as(usize, 63 * 1024), sw.wp);
     try testing.expectEqual(@as(usize, 1024), sw.free());
 
     sw.writeAll(data[0..200]);
     _ = sw.readAtMost(1024); // make some space
     sw.writeAll(data); // overflows write position
-    try testing.expectEqual(@as(usize, 200 + 65536), sw.wpos);
-    try testing.expectEqual(@as(usize, 1024), sw.rpos);
+    try testing.expectEqual(@as(usize, 200 + 65536), sw.wp);
+    try testing.expectEqual(@as(usize, 1024), sw.rp);
     try testing.expectEqual(@as(usize, 1024 - 200), sw.free());
 
     const rb = sw.readBlock(SlidingWindow.buffer_len);
@@ -535,8 +535,8 @@ test "SlidingWindow circular buffer" {
     try testing.expectEqual(@as(usize, 65536), rb.tail);
 
     try testing.expectEqual(@as(usize, 65536 - 1024), sw.read().len); // read to the end of the buffer
-    try testing.expectEqual(@as(usize, 200 + 65536), sw.wpos);
-    try testing.expectEqual(@as(usize, 65536), sw.rpos);
+    try testing.expectEqual(@as(usize, 200 + 65536), sw.wp);
+    try testing.expectEqual(@as(usize, 65536), sw.rp);
     try testing.expectEqual(@as(usize, 65536 - 200), sw.free());
 
     try testing.expectEqual(@as(usize, 200), sw.read().len); // read the rest
@@ -544,25 +544,25 @@ test "SlidingWindow circular buffer" {
 
 test "SlidingWindow write over border" {
     var sw: SlidingWindow = .{};
-    sw.wpos = sw.buffer.len - 15;
-    sw.rpos = sw.wpos;
+    sw.wp = sw.buffer.len - 15;
+    sw.rp = sw.wp;
 
     sw.writeAll("0123456789");
     sw.writeAll("abcdefghij");
 
-    try testing.expectEqual(sw.buffer.len + 5, sw.wpos);
-    try testing.expectEqual(sw.buffer.len - 15, sw.rpos);
+    try testing.expectEqual(sw.buffer.len + 5, sw.wp);
+    try testing.expectEqual(sw.buffer.len - 15, sw.rp);
 
     try testing.expectEqualStrings("0123456789abcde", sw.read());
     try testing.expectEqualStrings("fghij", sw.read());
 
-    try testing.expect(sw.wpos == sw.rpos);
+    try testing.expect(sw.wp == sw.rp);
 }
 
 test "SlidingWindow copy over border" {
     var sw: SlidingWindow = .{};
-    sw.wpos = sw.buffer.len - 15;
-    sw.rpos = sw.wpos;
+    sw.wp = sw.buffer.len - 15;
+    sw.rp = sw.wp;
 
     sw.writeAll("0123456789");
     sw.copy(15, 5);
