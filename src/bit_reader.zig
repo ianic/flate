@@ -43,6 +43,10 @@ pub fn BitReader(comptime ReaderType: type) type {
             return value;
         }
 
+        pub fn readBit(self: *Self) anyerror!u1 {
+            return try self.read(u1);
+        }
+
         pub fn readBits(self: *Self, n: u4) !u16 {
             var mask: u16 = 0;
             for (0..n) |_| {

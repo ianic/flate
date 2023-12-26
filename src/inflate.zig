@@ -2,9 +2,7 @@ const std = @import("std");
 const assert = std.debug.assert;
 const testing = std.testing;
 const Huffman = @import("huffman.zig").Huffman;
-
 const BitReader = @import("bit_reader.zig").BitReader;
-// const bitReader = @import("bit_reader.zig").bitReader;
 
 pub fn inflate(reader: anytype) Inflate(@TypeOf(reader)) {
     return Inflate(@TypeOf(reader)).init(reader);
@@ -39,31 +37,8 @@ fn Inflate(comptime ReaderType: type) type {
         const Self = @This();
 
         pub fn init(rt: ReaderType) Self {
-            return .{
-                .rdr = BitReaderType.init(rt),
-            };
+            return .{ .rdr = BitReaderType.init(rt) };
         }
-
-        // inline fn readByte(self: *Self) !u8 {
-        //     return self.rdr.readBitsNoEof(u8, 8);
-        // }
-
-        // inline fn skipBytes(self: *Self, n: usize) !void {
-        //     for (0..n) |_| _ = try self.readByte();
-        // }
-
-        fn readBit(self: *Self) anyerror!u1 {
-            return try self.rdr.read(u1);
-        }
-
-        // inline fn readBits(self: *Self, comptime U: type, bits: usize) !U {
-        //     if (bits == 0) return 0;
-        //     return try self.rdr.readBitsNoEof(U, bits);
-        // }
-
-        // inline fn readLiteralBits(self: *Self, comptime U: type, bits: usize) !U {
-        //     return @bitReverse(try self.rdr.readBitsNoEof(U, bits));
-        // }
 
         inline fn decodeLength(self: *Self, code: u16) !u16 {
             assert(code >= 256 and code <= 285);
@@ -116,7 +91,6 @@ fn Inflate(comptime ReaderType: type) type {
         fn fixedBlock(self: *Self) !bool {
             while (!self.windowFull()) {
                 const code7 = try self.rdr.readLiteral(u7);
-                // std.debug.print("\ncode7: {b:0<7}", .{code7});
 
                 if (code7 < 0b0010_111) { // 7 bits, 256-279, codes 0000_000 - 0010_111
                     if (code7 == 0) return true; // end of block code 256
@@ -148,7 +122,6 @@ fn Inflate(comptime ReaderType: type) type {
             const hlit: u16 = @as(u16, try self.rdr.read(u5)) + 257; // number of ll code entries present - 257
             const hdist: u16 = @as(u16, try self.rdr.read(u5)) + 1; // number of distance code entries - 1
             const hclen: u8 = @as(u8, try self.rdr.read(u4)) + 4; // hclen + 4 code lenths are encoded
-            // std.debug.print("hlit: {d}, hdist: {d}, hclen: {d}\n", .{ hlit, hdist, hclen });
 
             // lengths for code lengths
             var cl_l = [_]u4{0} ** 19;
@@ -162,38 +135,33 @@ fn Inflate(comptime ReaderType: type) type {
             var lit_l = [_]u4{0} ** (286);
             var pos: usize = 0;
             while (pos < hlit) {
-                const c = try cl_h.next(self, Self.readBit);
+                const c = try cl_h.next(&self.rdr, BitReaderType.readBit);
                 pos += try self.dynamicCodeLength(c, &lit_l, pos);
             }
-            // std.debug.print("litl {d} {d}\n", .{ pos, lit_l });
 
             // distance code lenths
             var dst_l = [_]u4{0} ** (30);
             pos = 0;
             while (pos < hdist) {
-                const c = try cl_h.next(self, Self.readBit);
+                const c = try cl_h.next(&self.rdr, BitReaderType.readBit);
                 pos += try self.dynamicCodeLength(c, &dst_l, pos);
             }
-            // std.debug.print("dstl {d} {d}\n", .{ pos, dst_l });
 
             self.lit_h = Huffman(286).init(&lit_l);
             self.dst_h = Huffman(30).init(&dst_l);
         }
 
         fn dynamicBlock(self: *Self) !bool {
-            // std.debug.print("litl {}\n", .{lit_h});
             while (!self.windowFull()) {
-                const code = try self.lit_h.next(self, Self.readBit);
-                // std.debug.print("symbol {d}\n", .{code});
+                const code = try self.lit_h.next(&self.rdr, BitReaderType.readBit);
+
                 if (code == 256) return true; // end of block
                 if (code > 256) {
                     // decode backward pointer <length, distance>
                     const length = try self.decodeLength(code);
-                    const ds = try self.dst_h.next(self, Self.readBit); // distance symbol
+                    const ds = try self.dst_h.next(&self.rdr, BitReaderType.readBit); // distance symbol
                     const distance = try self.decodeDistance(ds);
                     self.win.copy(length, distance);
-
-                    //  std.debug.print("length: {d}, distance: {d}\n", .{ length, distance });
                 } else {
                     // literal
                     self.win.write(@intCast(code));
