@@ -3,6 +3,9 @@ const assert = std.debug.assert;
 const testing = std.testing;
 const Huffman = @import("huffman.zig").Huffman;
 
+const BitReader = @import("bit_reader.zig").BitReader;
+// const bitReader = @import("bit_reader.zig").bitReader;
+
 pub fn inflate(reader: anytype) Inflate(@TypeOf(reader)) {
     return Inflate(@TypeOf(reader)).init(reader);
 }
@@ -11,7 +14,7 @@ pub fn inflate(reader: anytype) Inflate(@TypeOf(reader)) {
 // Backward pointer is limited in distance to 32K bytes and lengths to 258 bytes.
 
 fn Inflate(comptime ReaderType: type) type {
-    const BitReaderType = std.io.BitReader(.little, ReaderType);
+    const BitReaderType = BitReader(ReaderType);
     return struct {
         rdr: BitReaderType,
         win: SlidingWindow = .{},
@@ -41,52 +44,52 @@ fn Inflate(comptime ReaderType: type) type {
             };
         }
 
-        inline fn readByte(self: *Self) !u8 {
-            return self.rdr.readBitsNoEof(u8, 8);
-        }
+        // inline fn readByte(self: *Self) !u8 {
+        //     return self.rdr.readBitsNoEof(u8, 8);
+        // }
 
-        inline fn skipBytes(self: *Self, n: usize) !void {
-            for (0..n) |_| _ = try self.readByte();
-        }
+        // inline fn skipBytes(self: *Self, n: usize) !void {
+        //     for (0..n) |_| _ = try self.readByte();
+        // }
 
         fn readBit(self: *Self) anyerror!u1 {
-            return try self.rdr.readBitsNoEof(u1, 1);
+            return try self.rdr.read(u1);
         }
 
-        inline fn readBits(self: *Self, comptime U: type, bits: usize) !U {
-            if (bits == 0) return 0;
-            return try self.rdr.readBitsNoEof(U, bits);
-        }
+        // inline fn readBits(self: *Self, comptime U: type, bits: usize) !U {
+        //     if (bits == 0) return 0;
+        //     return try self.rdr.readBitsNoEof(U, bits);
+        // }
 
-        inline fn readLiteralBits(self: *Self, comptime U: type, bits: usize) !U {
-            return @bitReverse(try self.rdr.readBitsNoEof(U, bits));
-        }
+        // inline fn readLiteralBits(self: *Self, comptime U: type, bits: usize) !U {
+        //     return @bitReverse(try self.rdr.readBitsNoEof(U, bits));
+        // }
 
         inline fn decodeLength(self: *Self, code: u16) !u16 {
             assert(code >= 256 and code <= 285);
             const bl = backwardLength(code);
-            return bl.base_length + try self.readBits(u16, bl.extra_bits);
+            return bl.base_length + try self.rdr.readBits(bl.extra_bits);
         }
 
         inline fn decodeDistance(self: *Self, code: u16) !u16 {
             assert(code <= 29);
             const bd = backwardDistance(code);
-            return bd.base_distance + try self.readBits(u16, bd.extra_bits);
+            return bd.base_distance + try self.rdr.readBits(bd.extra_bits);
         }
 
         fn gzipHeader(self: *Self) !void {
-            const magic1 = try self.readByte();
-            const magic2 = try self.readByte();
-            const method = try self.readByte();
-            try self.skipBytes(7); // flags, mtime(4), xflags, os
+            const magic1 = try self.rdr.readByte();
+            const magic2 = try self.rdr.readByte();
+            const method = try self.rdr.readByte();
+            self.rdr.skipBytes(7); // flags, mtime(4), xflags, os
             if (magic1 != 0x1f or magic2 != 0x8b or method != 0x08)
                 return error.InvalidGzipHeader;
         }
 
         fn gzipFooter(self: *Self) !void {
             self.rdr.alignToByte();
-            const chksum = try self.readBits(u32, 32);
-            const size = try self.readBits(u32, 32);
+            const chksum = try self.rdr.readU32();
+            const size = try self.rdr.readU32();
 
             if (chksum != self.win.chksum()) return error.GzipFooterChecksum;
             if (size != self.win.size()) return error.GzipFooterSize;
@@ -94,25 +97,25 @@ fn Inflate(comptime ReaderType: type) type {
 
         fn nonCompressedBlock(self: *Self) !bool {
             self.rdr.alignToByte(); // skip 5 bits
-            const len = try self.readBits(u16, 16);
-            const nlen = try self.readBits(u16, 16);
+            const len = try self.rdr.readU16();
+            const nlen = try self.rdr.readU16();
 
             if (len != ~nlen) return error.DeflateWrongNlen;
             for (0..len) |_| {
-                self.win.write(try self.readByte());
+                self.win.write(try self.rdr.readByte());
             }
             return true;
         }
 
         fn windowFull(self: *Self) bool {
-            // 258 is largest backreference length.
+            // 258 is largest back reference length.
             // That much bytes can be produced in single step.
             return self.win.free() < 258 + 1;
         }
 
         fn fixedBlock(self: *Self) !bool {
             while (!self.windowFull()) {
-                const code7 = try self.readLiteralBits(u7, 7);
+                const code7 = try self.rdr.readLiteral(u7);
                 // std.debug.print("\ncode7: {b:0<7}", .{code7});
 
                 if (code7 < 0b0010_111) { // 7 bits, 256-279, codes 0000_000 - 0010_111
@@ -120,13 +123,13 @@ fn Inflate(comptime ReaderType: type) type {
                     const code: u16 = @as(u16, code7) + 256;
                     try self.fixedDistanceCode(code);
                 } else if (code7 < 0b1011_111) { // 8 bits, 0-143, codes 0011_0000 through 1011_1111
-                    const lit: u8 = (@as(u8, code7 - 0b0011_000) << 1) + try self.readBits(u1, 1);
+                    const lit: u8 = (@as(u8, code7 - 0b0011_000) << 1) + try self.rdr.read(u1);
                     self.win.write(lit);
                 } else if (code7 <= 0b1100_011) { // 8 bit, 280-287, codes 1100_0000 - 1100_0111
-                    const code: u16 = (@as(u16, code7 - 0b1100011) << 1) + try self.readBits(u1, 1) + 280;
+                    const code: u16 = (@as(u16, code7 - 0b1100011) << 1) + try self.rdr.read(u1) + 280;
                     try self.fixedDistanceCode(code);
                 } else { // 9 bit, 144-255, codes 1_1001_0000 - 1_1111_1111
-                    const lit: u8 = (@as(u8, code7 - 0b1100_100) << 2) + try self.readLiteralBits(u2, 2) + 144;
+                    const lit: u8 = (@as(u8, code7 - 0b1100_100) << 2) + try self.rdr.readLiteral(u2) + 144;
                     self.win.write(lit);
                 }
             }
@@ -137,21 +140,21 @@ fn Inflate(comptime ReaderType: type) type {
         // Length code is followed by 5 bits of distance code.
         fn fixedDistanceCode(self: *Self, code: u16) !void {
             const length = try self.decodeLength(code);
-            const distance = try self.decodeDistance(try self.readBits(u16, 5));
+            const distance = try self.decodeDistance(try self.rdr.read(u5));
             self.win.copy(length, distance);
         }
 
         fn initDynamicBlock(self: *Self) !void {
-            const hlit = try self.readBits(u16, 5) + 257; // number of ll code entries present - 257
-            const hdist = try self.readBits(u16, 5) + 1; // number of distance code entries - 1
-            const hclen = try self.readBits(u8, 4) + 4; // hclen + 4 code lenths are encoded
+            const hlit: u16 = @as(u16, try self.rdr.read(u5)) + 257; // number of ll code entries present - 257
+            const hdist: u16 = @as(u16, try self.rdr.read(u5)) + 1; // number of distance code entries - 1
+            const hclen: u8 = @as(u8, try self.rdr.read(u4)) + 4; // hclen + 4 code lenths are encoded
             // std.debug.print("hlit: {d}, hdist: {d}, hclen: {d}\n", .{ hlit, hdist, hclen });
 
             // lengths for code lengths
             var cl_l = [_]u4{0} ** 19;
             const order = [_]u8{ 16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15 };
             for (0..hclen) |i| {
-                cl_l[order[i]] = try self.readBits(u3, 3);
+                cl_l[order[i]] = try self.rdr.read(u3);
             }
             var cl_h = Huffman(19).init(&cl_l);
 
@@ -207,16 +210,16 @@ fn Inflate(comptime ReaderType: type) type {
                 16 => {
                     // Copy the previous code length 3 - 6 times.
                     // The next 2 bits indicate repeat length
-                    const n: u8 = try self.readBits(u8, 2) + 3;
+                    const n: u8 = @as(u8, try self.rdr.read(u2)) + 3;
                     for (0..n) |i| {
                         lens[pos + i] = lens[pos + i - 1];
                     }
                     return n;
                 },
                 // Repeat a code length of 0 for 3 - 10 times. (3 bits of length)
-                17 => return try self.readBits(u8, 3) + 3,
+                17 => return @as(u8, try self.rdr.read(u3)) + 3,
                 // Repeat a code length of 0 for 11 - 138 times (7 bits of length)
-                18 => return try self.readBits(u8, 7) + 11,
+                18 => return @as(u8, try self.rdr.read(u7)) + 11,
                 else => {
                     // Represent code lengths of 0 - 15
                     lens[pos] = @intCast(code);
@@ -239,8 +242,8 @@ fn Inflate(comptime ReaderType: type) type {
                         self.state = .deflate_header;
                     },
                     .deflate_header => {
-                        self.bfinal = try self.readBits(u1, 1);
-                        self.block_type = try self.readBits(u2, 2);
+                        self.bfinal = try self.rdr.read(u1);
+                        self.block_type = try self.rdr.read(u2);
                         self.state = .deflate_block;
                         if (self.block_type == 2) try self.initDynamicBlock();
                     },
@@ -273,7 +276,7 @@ fn backwardLength(c: u16) BackwardLength {
 
 const BackwardLength = struct {
     code: u16,
-    extra_bits: u8,
+    extra_bits: u4,
     base_length: u16,
 };
 
@@ -315,7 +318,7 @@ fn backwardDistance(c: u16) BackwardDistance {
 
 const BackwardDistance = struct {
     code: u8,
-    extra_bits: u8,
+    extra_bits: u4,
     base_distance: u16,
 };
 
