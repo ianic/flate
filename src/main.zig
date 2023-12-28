@@ -11,15 +11,12 @@ pub fn main() !void {
     defer file.close();
     var br = std.io.bufferedReader(file.reader());
 
-    // const stdin = std.io.getStdIn();
-    // var br = std.io.bufferedReader(stdin.reader());
-
-    const stdout = std.io.getStdOut();
+    //const stdout = std.io.getStdOut();
     var il = inflate(br.reader());
     while (true) {
         const buf = try il.read();
         if (buf.len == 0) return;
-        try stdout.writeAll(buf);
+        // try stdout.writeAll(buf);
     }
 }
 
@@ -38,7 +35,7 @@ pub fn _main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const stdout = std.io.getStdOut();
+    //const stdout = std.io.getStdOut();
     var il = try std.compress.gzip.decompress(allocator, br.reader());
     var rdr = il.reader();
 
@@ -49,6 +46,6 @@ pub fn _main() !void {
             unreachable;
         };
         if (n == 0) return;
-        try stdout.writeAll(buf[0..n]);
+        //try stdout.writeAll(buf[0..n]);
     }
 }
