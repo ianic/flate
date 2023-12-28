@@ -9,7 +9,7 @@ pub fn bitReader(reader: anytype) BitReader(@TypeOf(reader)) {
 pub fn BitReader(comptime ReaderType: type) type {
     return struct {
         rdr: ReaderType,
-        bits: u32 = 0, // buffer of 32 bits
+        bits: u64 = 0, // buffer of 64 bits
         eos: u8 = 0, // end of stream position
 
         const Self = @This();
@@ -48,8 +48,8 @@ pub fn BitReader(comptime ReaderType: type) type {
         }
 
         pub fn readU32(self: *Self) !u32 {
-            assert(self.eos == 32);
-            const v = self.bits;
+            assert(self.eos >= 32);
+            const v: u32 = @truncate(self.bits);
             self.advanceBytes(4);
             return v;
         }
@@ -83,7 +83,7 @@ pub fn BitReader(comptime ReaderType: type) type {
             self.bits >>= n;
             self.eos -= n;
 
-            if (self.eos <= 24)
+            if (self.eos <= 32)
                 self.moreBits(); // refill upper byte(s)
         }
 
@@ -110,9 +110,9 @@ pub fn BitReader(comptime ReaderType: type) type {
         }
 
         inline fn moreBits(self: *Self) void {
-            while (self.eos <= 24) {
+            while (self.eos <= 7 * 8) {
                 const b = self.rdr.readByte() catch return;
-                self.bits |= @as(u32, b) << @as(u5, @intCast(self.eos));
+                self.bits |= @as(u64, b) << @as(u6, @intCast(self.eos));
                 self.eos += 8;
             }
         }
@@ -123,18 +123,18 @@ test "BitReader" {
     var fbs = std.io.fixedBufferStream(&[_]u8{ 0xf3, 0x48, 0xcd, 0xc9, 0x00, 0x00 });
     var br = bitReader(fbs.reader());
 
-    try testing.expectEqual(@as(u8, 32), br.eos);
-    try testing.expectEqual(@as(u32, 0xc9cd48f3), br.bits);
+    try testing.expectEqual(@as(u8, 48), br.eos);
+    try testing.expectEqual(@as(u64, 0xc9cd48f3), br.bits);
 
     try testing.expect(try br.read(u1) == 0b0000_0001);
     try testing.expect(try br.read(u2) == 0b0000_0001);
-    try testing.expectEqual(@as(u8, 32 - 3), br.eos);
+    try testing.expectEqual(@as(u8, 48 - 3), br.eos);
     try testing.expectEqual(@as(u3, 5), br.alignBits());
 
     try testing.expect(try br.peek(u8) == 0b0001_1110);
     try testing.expect(try br.peek(u9) == 0b1_0001_1110);
     br.advance(9);
-    try testing.expectEqual(@as(u8, 28), br.eos);
+    try testing.expectEqual(@as(u8, 36), br.eos);
     try testing.expectEqual(@as(u3, 4), br.alignBits());
 
     try testing.expect(try br.read(u4) == 0b0100);
@@ -148,7 +148,7 @@ test "BitReader" {
     br.alignToByte();
     try testing.expectEqual(@as(u3, 0), br.alignBits());
 
-    try testing.expectEqual(@as(u32, 0xc9), br.bits);
+    try testing.expectEqual(@as(u64, 0xc9), br.bits);
     try testing.expectEqual(@as(u16, 0x9), try br.readBits(4));
     try testing.expectEqual(@as(u16, 0xc), try br.readBits(4));
 }
