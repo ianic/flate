@@ -11,17 +11,12 @@ pub fn BitReader(comptime ReaderType: type) type {
         rdr: ReaderType,
         bits: u32 = 0, // buffer of 32 bits
         eos: u8 = 0, // end of stream position
-        align_bits: u3 = 0, // number of bits to skip to byte alignment
 
         const Self = @This();
 
         pub fn init(rdr: ReaderType) Self {
             var self = Self{ .rdr = rdr };
-            for (0..4) |byte| {
-                const b = self.rdr.readByte() catch break;
-                self.bits += @as(u32, b) << @as(u5, @intCast(byte * 8));
-                self.eos += 8;
-            }
+            self.moreBits();
             return self;
         }
 
@@ -31,10 +26,6 @@ pub fn BitReader(comptime ReaderType: type) type {
             const v: U = @truncate(self.bits);
             self.advance(bit_count);
             return v;
-        }
-
-        pub fn readBit(self: *Self) anyerror!u1 {
-            return try self.read(u1);
         }
 
         pub fn readBits(self: *Self, n: u4) !u16 {
@@ -50,29 +41,24 @@ pub fn BitReader(comptime ReaderType: type) type {
         }
 
         pub fn readByte(self: *Self) !u8 {
-            assert(self.align_bits == 0 and self.eos >= 8);
+            assert(self.eos >= 8);
             const v: u8 = @truncate(self.bits);
             self.advanceBytes(1);
             return v;
         }
 
         pub fn readU32(self: *Self) !u32 {
-            assert(self.align_bits == 0 and self.eos == 32);
+            assert(self.eos == 32);
             const v = self.bits;
             self.advanceBytes(4);
             return v;
         }
 
         pub fn readU16(self: *Self) !u16 {
-            assert(self.align_bits == 0 and self.eos >= 16);
+            assert(self.eos >= 16);
             const v: u16 = @truncate(self.bits);
             self.advanceBytes(2);
             return v;
-        }
-
-        pub fn skipBytes(self: *Self, n: u3) void {
-            assert(self.align_bits == 0);
-            self.advanceBytes(n);
         }
 
         pub fn peek15(self: *Self) u16 {
@@ -91,25 +77,18 @@ pub fn BitReader(comptime ReaderType: type) type {
             return @truncate(self.bits);
         }
 
-        pub fn advance(self: *Self, bit_count: u4) void {
-            assert(bit_count <= self.eos);
+        pub fn advance(self: *Self, n: u4) void {
+            assert(n <= self.eos);
 
-            var bc: u4 = bit_count;
-            while (bc > 0) {
-                const ab: u4 = if (self.align_bits == 0) 8 else self.align_bits;
-                const n: u4 = @min(bc, ab);
+            self.bits >>= n;
+            self.eos -= n;
 
-                //std.debug.print("n: {d}, bit_count: {d}\n", .{ n, bit_count });
-                self.bits >>= n;
-                self.eos -= n;
-                if (n != 8)
-                    self.align_bits -%= @intCast(n);
+            if (self.eos <= 24)
+                self.moreBits(); // refill upper byte(s)
+        }
 
-                if (self.eos == 24)
-                    self.moreBits(); // refill upper byte
-
-                bc -= n;
-            }
+        pub fn skipBytes(self: *Self, n: u3) void {
+            self.advanceBytes(n);
         }
 
         inline fn advanceBytes(self: *Self, n: u3) void {
@@ -120,22 +99,22 @@ pub fn BitReader(comptime ReaderType: type) type {
             }
         }
 
-        pub fn alignToByte(self: *Self) void {
-            if (self.align_bits > 0)
-                self.advance(self.align_bits);
+        inline fn alignBits(self: *Self) u3 {
+            return @intCast(self.eos % 8);
         }
 
-        fn moreBits(self: *Self) void {
-            // const b = self.rdr.readByte() catch return;
-            // self.bits |= @as(u32, b) << 24;
-            // self.eos = 32;
+        pub fn alignToByte(self: *Self) void {
+            const ab = self.alignBits();
+            if (ab > 0)
+                self.advance(ab);
+        }
 
-            var result: [1]u8 = undefined;
-            const amt_read = self.rdr.read(result[0..]) catch 0;
-            if (amt_read != 1) return;
-            const b = result[0];
-            self.bits |= @as(u32, b) << 24;
-            self.eos = 32;
+        inline fn moreBits(self: *Self) void {
+            while (self.eos <= 24) {
+                const b = self.rdr.readByte() catch return;
+                self.bits |= @as(u32, b) << @as(u5, @intCast(self.eos));
+                self.eos += 8;
+            }
         }
     };
 }
@@ -150,24 +129,24 @@ test "BitReader" {
     try testing.expect(try br.read(u1) == 0b0000_0001);
     try testing.expect(try br.read(u2) == 0b0000_0001);
     try testing.expectEqual(@as(u8, 32 - 3), br.eos);
-    try testing.expectEqual(@as(u3, 5), br.align_bits);
+    try testing.expectEqual(@as(u3, 5), br.alignBits());
 
     try testing.expect(try br.peek(u8) == 0b0001_1110);
     try testing.expect(try br.peek(u9) == 0b1_0001_1110);
     br.advance(9);
     try testing.expectEqual(@as(u8, 28), br.eos);
-    try testing.expectEqual(@as(u3, 4), br.align_bits);
+    try testing.expectEqual(@as(u3, 4), br.alignBits());
 
     try testing.expect(try br.read(u4) == 0b0100);
     try testing.expectEqual(@as(u8, 32), br.eos);
-    try testing.expectEqual(@as(u3, 0), br.align_bits);
+    try testing.expectEqual(@as(u3, 0), br.alignBits());
 
     br.advance(1);
-    try testing.expectEqual(@as(u3, 7), br.align_bits);
+    try testing.expectEqual(@as(u3, 7), br.alignBits());
     br.advance(1);
-    try testing.expectEqual(@as(u3, 6), br.align_bits);
+    try testing.expectEqual(@as(u3, 6), br.alignBits());
     br.alignToByte();
-    try testing.expectEqual(@as(u3, 0), br.align_bits);
+    try testing.expectEqual(@as(u3, 0), br.alignBits());
 
     try testing.expectEqual(@as(u32, 0xc9), br.bits);
     try testing.expectEqual(@as(u16, 0x9), try br.readBits(4));
