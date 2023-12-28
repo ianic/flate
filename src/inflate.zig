@@ -116,7 +116,7 @@ fn Inflate(comptime ReaderType: type) type {
         fn fixedDistanceCode(self: *Self, code: u16) !void {
             const length = try self.decodeLength(code);
             const distance = try self.decodeDistance(try self.rdr.read(u5));
-            self.win.copy(length, distance);
+            self.win.writeCopy(length, distance);
         }
 
         fn initDynamicBlock(self: *Self) !void {
@@ -172,7 +172,7 @@ fn Inflate(comptime ReaderType: type) type {
                     self.rdr.advance(dsm.code_bits);
 
                     const distance = try self.decodeDistance(dsm.symbol);
-                    self.win.copy(length, distance);
+                    self.win.writeCopy(length, distance);
                 } else {
                     // literal
                     self.win.write(@intCast(code));
@@ -389,17 +389,20 @@ const SlidingWindow = struct {
     rp: usize = 0, // read position
     crc: std.hash.Crc32 = std.hash.Crc32.init(),
 
-    pub fn writeAll(self: *SlidingWindow, buf: []const u8) void {
+    fn writeAll(self: *SlidingWindow, buf: []const u8) void {
         for (buf) |c| self.write(c);
     }
 
+    // Write single byte.
     pub fn write(self: *SlidingWindow, b: u8) void {
         assert(self.wp - self.rp < mask);
         self.buffer[self.wp & mask] = b;
         self.wp += 1;
     }
 
-    pub fn copy(self: *SlidingWindow, length: u16, distance: u16) void {
+    // Write backreference starting at `distance` back from current write
+    // position, and `length` of bytes.
+    pub fn writeCopy(self: *SlidingWindow, length: u16, distance: u16) void {
         assert(self.wp - self.rp < mask);
         var from: usize = self.wp - distance;
         const from_end: usize = from + length;
@@ -424,10 +427,14 @@ const SlidingWindow = struct {
         }
     }
 
+    // Read available data. Can return part of the available data if it is
+    // spread across two circles. So read until this returns zero length.
     pub fn read(self: *SlidingWindow) []const u8 {
         return self.readAtMost(buffer_len);
     }
 
+    // Read part of available data. Can return less than max even if there are
+    // more than max decoded data.
     pub fn readAtMost(self: *SlidingWindow, max: usize) []const u8 {
         const rb = self.readBlock(max);
         defer self.rp += rb.len;
@@ -457,15 +464,17 @@ const SlidingWindow = struct {
         };
     }
 
-    pub fn free(self: *SlidingWindow) usize {
+    // Number of free bytes for write.
+    pub inline fn free(self: *SlidingWindow) usize {
         return buffer_len - (self.wp - self.rp);
     }
 
+    // Checksum of all read bytes.
     pub fn chksum(self: *SlidingWindow) u32 {
         return self.crc.final();
     }
 
-    // bytes written
+    // Number of bytes written.
     pub fn size(self: *SlidingWindow) u32 {
         return @intCast(self.wp);
     }
@@ -476,8 +485,8 @@ test "SlidingWindow copy" {
     var sw: SlidingWindow = .{};
 
     sw.writeAll("a salad; ");
-    sw.copy(5, 9);
-    sw.copy(2, 3);
+    sw.writeCopy(5, 9);
+    sw.writeCopy(2, 3);
 
     try testing.expectEqualStrings("a salad; a salsa", sw.read());
 }
@@ -486,7 +495,7 @@ test "SlidingWindow copy overlap" {
     var sw: SlidingWindow = .{};
 
     sw.writeAll("a b c ");
-    sw.copy(8, 4);
+    sw.writeCopy(8, 4);
     sw.write('d');
 
     try testing.expectEqualStrings("a b c b c b c d", sw.read());
@@ -496,7 +505,7 @@ test "SlidingWindow readAtMost" {
     var sw: SlidingWindow = .{};
 
     sw.writeAll("0123456789");
-    sw.copy(50, 10);
+    sw.writeCopy(50, 10);
 
     try testing.expectEqualStrings("0123456789" ** 6, sw.buffer[sw.rp..sw.wp]);
     for (0..6) |i| {
@@ -516,7 +525,7 @@ test "SlidingWindow circular buffer" {
     try testing.expectEqual(@as(usize, 1024), sw.wp);
     try testing.expectEqual(@as(usize, 1024 * 63), sw.free());
 
-    sw.copy(62 * 1024, 1024);
+    sw.writeCopy(62 * 1024, 1024);
     try testing.expectEqual(@as(usize, 0), sw.rp);
     try testing.expectEqual(@as(usize, 63 * 1024), sw.wp);
     try testing.expectEqual(@as(usize, 1024), sw.free());
@@ -564,11 +573,11 @@ test "SlidingWindow copy over border" {
     sw.rp = sw.wp;
 
     sw.writeAll("0123456789");
-    sw.copy(15, 5);
+    sw.writeCopy(15, 5);
 
     try testing.expectEqualStrings("012345678956789", sw.read());
     try testing.expectEqualStrings("5678956789", sw.read());
 
-    sw.copy(20, 25);
+    sw.writeCopy(20, 25);
     try testing.expectEqualStrings("01234567895678956789", sw.read());
 }
