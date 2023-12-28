@@ -9,9 +9,10 @@ pub fn inflate(reader: anytype) Inflate(@TypeOf(reader)) {
     return Inflate(@TypeOf(reader)).init(reader);
 }
 
-// Non-compressible blocks are limited to 65,535 bytes.
-// Backward pointer is limited in distance to 32K bytes and lengths to 258 bytes.
-
+/// Allocates 196K of internal buffers:
+///   - 64K for sliding window
+///   - 2 * 32K of u16 for huffman codes
+///
 fn Inflate(comptime ReaderType: type) type {
     const BitReaderType = BitReader(ReaderType);
     return struct {
@@ -208,44 +209,78 @@ fn Inflate(comptime ReaderType: type) type {
             }
         }
 
-        // Returns decompressed data from internal sliding window buffer.
-        // Returned buffer can be any length between 0 and 65536 bytes,
-        // 0 len means end of stream reached.
-        pub fn read(self: *Self) ![]const u8 {
-            while (true) {
-                const buf = self.win.read();
-                if (buf.len > 0) return buf;
-
-                switch (self.state) {
-                    .gzip_header => {
-                        try self.gzipHeader();
-                        self.state = .deflate_header;
-                    },
-                    .deflate_header => {
-                        self.bfinal = try self.rdr.read(u1);
-                        self.block_type = try self.rdr.read(u2);
-                        self.state = .deflate_block;
-                        if (self.block_type == 2) try self.initDynamicBlock();
-                    },
-                    .deflate_block => {
-                        const done = switch (self.block_type) {
-                            0 => try self.nonCompressedBlock(),
-                            1 => try self.fixedBlock(),
-                            2 => try self.dynamicBlock(),
-                            else => unreachable,
-                        };
-                        if (done)
-                            self.state = if (self.bfinal == 1) .gzip_footer else .deflate_header;
-                    },
-                    .gzip_footer => {
-                        try self.gzipFooter();
-                        self.state = .end;
-                    },
-                    .end => {
-                        return buf;
-                    },
-                }
+        fn step(self: *Self) Error!void {
+            switch (self.state) {
+                .gzip_header => {
+                    try self.gzipHeader();
+                    self.state = .deflate_header;
+                },
+                .deflate_header => {
+                    self.bfinal = try self.rdr.read(u1);
+                    self.block_type = try self.rdr.read(u2);
+                    self.state = .deflate_block;
+                    if (self.block_type == 2) try self.initDynamicBlock();
+                },
+                .deflate_block => {
+                    const done = switch (self.block_type) {
+                        0 => try self.nonCompressedBlock(),
+                        1 => try self.fixedBlock(),
+                        2 => try self.dynamicBlock(),
+                        else => unreachable,
+                    };
+                    if (done)
+                        self.state = if (self.bfinal == 1) .gzip_footer else .deflate_header;
+                },
+                .gzip_footer => {
+                    try self.gzipFooter();
+                    self.state = .end;
+                },
+                .end => {},
             }
+        }
+
+        /// Returns decompressed data from internal sliding window buffer.
+        /// Returned buffer can be any length between 0 and 65536 bytes,
+        /// null means end of stream reached.
+        /// Can be used in iterator like loop without memcpy to another buffer:
+        ///   while (try inflate.nextChunk()) |buf| { ... }
+        pub fn nextChunk(self: *Self) Error!?[]const u8 {
+            while (true) {
+                const out = self.win.read();
+                if (out.len > 0) return out;
+                if (self.state == .end) return null;
+                try self.step();
+            }
+        }
+
+        // reader interface implementation
+
+        pub const Error = ReaderType.Error || error{
+            EndOfStream,
+            InvalidGzipHeader,
+            GzipFooterSize,
+            GzipFooterChecksum,
+            DeflateWrongNlen,
+        };
+        pub const Reader = std.io.Reader(*Self, Error, read);
+
+        /// Returns the number of bytes read. It may be less than buffer.len.
+        /// If the number of bytes read is 0, it means end of stream.
+        /// End of stream is not an error condition.
+        pub fn read(self: *Self, buffer: []u8) Error!usize {
+            while (true) {
+                const out = self.win.readAtMost(buffer.len);
+                if (out.len > 0) {
+                    @memcpy(buffer[0..out.len], out);
+                    return out.len;
+                }
+                if (self.state == .end) return 0;
+                try self.step();
+            }
+        }
+
+        pub fn reader(self: *Self) Reader {
+            return .{ .context = self };
         }
     };
 }
@@ -376,7 +411,8 @@ test "inflate test cases" {
     for (cases) |c| {
         var fb = std.io.fixedBufferStream(c.in);
         var il = inflate(fb.reader());
-        try testing.expectEqualStrings(c.out, try il.read());
-        try testing.expect((try il.read()).len == 0);
+
+        try testing.expectEqualStrings(c.out, (try il.nextChunk()).?);
+        try testing.expect((try il.nextChunk()) == null);
     }
 }
