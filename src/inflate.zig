@@ -402,14 +402,26 @@ const SlidingWindow = struct {
     pub fn copy(self: *SlidingWindow, length: u16, distance: u16) void {
         assert(self.wp - self.rp < mask);
         var from: usize = self.wp - distance;
+        const from_end: usize = from + length;
         var to: usize = self.wp;
         const to_end: usize = to + length;
+
+        self.wp += length;
+
+        // fast path for
+        // non overlapping buffers
+        // start and and at the same circle
+        if (to > from_end and ((from >> 16) == (to_end >> 16))) {
+            @memcpy(self.buffer[to & mask .. to_end & mask], self.buffer[from & mask .. from_end & mask]);
+            return;
+        }
+
+        // slow path
         while (to < to_end) {
             self.buffer[to & mask] = self.buffer[from & mask];
             to += 1;
             from += 1;
         }
-        self.wp += length;
     }
 
     pub fn read(self: *SlidingWindow) []const u8 {
