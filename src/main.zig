@@ -23,7 +23,7 @@ pub fn main() !void {
     }
 }
 
-pub fn std_main() !void {
+pub fn _main() !void {
     const argv = std.os.argv;
     if (argv.len == 1) return;
 

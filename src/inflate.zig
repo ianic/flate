@@ -17,20 +17,16 @@ fn Inflate(comptime ReaderType: type) type {
         rdr: BitReaderType,
         win: SlidingWindow = .{},
 
-        // dynamic block huffman codes for literals and distances
-        lit_h: Huffman(286) = undefined,
-        dst_h: Huffman(30) = undefined,
-
-        lit_lookup: [lookup_size]u16 = undefined,
-        dst_lookup: [lookup_size]u16 = undefined,
-        cl_lookup: [2 << 7]u16 = undefined,
+        // dynamic block huffman codes
+        lit_h: Huffman(286) = .{}, // literals
+        dst_h: Huffman(30) = .{}, // distances
+        cl_h: Huffman(19) = .{}, // code length
 
         // current read state
         bfinal: u1 = 0,
         block_type: u2 = 0b11,
         state: ReadState = .gzip_header,
 
-        const lookup_size = 2 << 15;
         const ReadState = enum {
             gzip_header,
             deflate_header,
@@ -134,62 +130,48 @@ fn Inflate(comptime ReaderType: type) type {
             for (0..hclen) |i| {
                 cl_l[order[i]] = try self.rdr.read(u3);
             }
-            var cl_h = Huffman(19).init(&cl_l, &self.cl_lookup);
+            self.cl_h.init(&cl_l);
 
             // literal code lengths
             var lit_l = [_]u4{0} ** (286);
             var pos: usize = 0;
             while (pos < hlit) {
-                // const c = try cl_h.next(&self.rdr, BitReaderType.readBit);
-
-                const bits: u16 = self.rdr.peek7();
-                const sym = cl_h.find(bits);
-                const c = sym.symbol;
-                self.rdr.advance(sym.code_len);
-
-                pos += try self.dynamicCodeLength(c, &lit_l, pos);
+                const sym = self.cl_h.find(self.rdr.peek7());
+                self.rdr.advance(sym.code_bits);
+                pos += try self.dynamicCodeLength(sym.symbol, &lit_l, pos);
             }
 
             // distance code lenths
             var dst_l = [_]u4{0} ** (30);
             pos = 0;
             while (pos < hdist) {
-                // const c = try cl_h.next(&self.rdr, BitReaderType.readBit);
-
-                const bits: u16 = self.rdr.peek7();
-                const sym = cl_h.find(bits);
-                const c = sym.symbol;
-                self.rdr.advance(sym.code_len);
-
-                pos += try self.dynamicCodeLength(c, &dst_l, pos);
+                const sym = self.cl_h.find(self.rdr.peek7());
+                self.rdr.advance(sym.code_bits);
+                pos += try self.dynamicCodeLength(sym.symbol, &dst_l, pos);
             }
 
-            self.lit_h = Huffman(286).init(&lit_l, &self.lit_lookup);
-            self.dst_h = Huffman(30).init(&dst_l, &self.dst_lookup);
+            self.lit_h.init(&lit_l);
+            self.dst_h.init(&dst_l);
         }
 
         fn dynamicBlock(self: *Self) !bool {
             while (!self.windowFull()) {
-                //const code = try self.lit_h.next(&self.rdr, BitReaderType.readBit);
+                const sym = self.lit_h.find(self.rdr.peek15());
+                self.rdr.advance(sym.code_bits);
 
-                const bits: u16 = self.rdr.peek15();
-                const sym = self.lit_h.find(bits);
                 const code = sym.symbol;
-                self.rdr.advance(sym.code_len);
-                //std.debug.print("{d} ", .{code});
-
-                if (code == 256) return true; // end of block
+                if (code == 256) {
+                    // end of block
+                    return true;
+                }
                 if (code > 256) {
                     // decode backward pointer <length, distance>
                     const length = try self.decodeLength(code);
-                    //const ds = try self.dst_h.next(&self.rdr, BitReaderType.readBit); // distance symbol
 
-                    const ds_bits: u16 = self.rdr.peek15();
-                    const ds_sym = self.dst_h.find(ds_bits);
-                    const ds = ds_sym.symbol;
-                    self.rdr.advance(ds_sym.code_len);
+                    const dsm = self.dst_h.find(self.rdr.peek15()); // distance symbol
+                    self.rdr.advance(dsm.code_bits);
 
-                    const distance = try self.decodeDistance(ds);
+                    const distance = try self.decodeDistance(dsm.symbol);
                     self.win.copy(length, distance);
                 } else {
                     // literal
