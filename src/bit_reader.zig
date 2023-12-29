@@ -16,24 +16,26 @@ pub fn BitReader(comptime ReaderType: type) type {
 
         pub fn init(rdr: ReaderType) Self {
             var self = Self{ .rdr = rdr };
-            self.moreBits();
+            self.ensureBits(1) catch {};
             return self;
         }
 
         pub inline fn read(self: *Self, comptime U: type) !U {
-            const bit_count: u4 = @bitSizeOf(U);
-            if (bit_count > self.eos) return error.EndOfStream;
-            const v: U = @truncate(self.bits);
-            self.advance(bit_count);
-            return v;
+            const n: u4 = @bitSizeOf(U);
+            try self.ensureBits(n);
+            const u: U = @truncate(self.bits);
+            self.advance(n);
+            return u;
         }
 
         pub inline fn readBits(self: *Self, n: u4) !u16 {
             if (n == 0) return 0;
+            try self.ensureBits(n);
+
             const mask: u16 = @as(u16, 0xffff) >> (15 - n + 1);
-            const v: u16 = @as(u16, @truncate(self.bits)) & mask;
+            const u: u16 = @as(u16, @truncate(self.bits)) & mask;
             self.advance(n);
-            return v;
+            return u;
         }
 
         pub inline fn readLiteral(self: *Self, comptime U: type) !U {
@@ -41,54 +43,31 @@ pub fn BitReader(comptime ReaderType: type) type {
         }
 
         pub inline fn readU8(self: *Self) !u8 {
-            // assert(self.eos >= 8);
-            if (self.eos < 8) return error.EndOfStream;
-            const v: u8 = @truncate(self.bits);
-            // self.advanceBytes(1);
+            try self.ensureBits(8);
+            const u: u8 = @truncate(self.bits);
             self.advance(8);
-            return v;
+            return u;
         }
 
         pub inline fn readU32(self: *Self) !u32 {
-            assert(self.eos >= 32);
-            const v: u32 = @truncate(self.bits);
-            //self.advanceBytes(4);
+            try self.ensureBits(32);
+            const u: u32 = @truncate(self.bits);
             self.advance(32);
-            return v;
+            return u;
         }
 
         pub inline fn readU16(self: *Self) !u16 {
-            assert(self.eos >= 16);
-            const v: u16 = @truncate(self.bits);
-            //self.advanceBytes(2);
+            try self.ensureBits(16);
+            const u: u16 = @truncate(self.bits);
             self.advance(16);
-            return v;
+            return u;
         }
 
-        pub inline fn peek15(self: *Self) u16 {
-            const v: u15 = @truncate(self.bits);
-            return @bitReverse(v);
-        }
-
-        pub inline fn peek7(self: *Self) u16 {
-            const v: u7 = @truncate(self.bits);
-            return @bitReverse(v);
-        }
-
-        pub fn peek(self: *Self, comptime U: type) !U {
-            const u_bit_count: u4 = @bitSizeOf(U);
-            if (u_bit_count > self.eos) return error.EndOfStream;
-            return @truncate(self.bits);
-        }
-
-        pub inline fn advance(self: *Self, n: u6) void {
-            assert(n <= self.eos);
-
-            self.bits >>= n;
-            self.eos -= n;
-
-            if (self.eos <= 32)
-                self.moreBits(); // refill upper byte(s)
+        inline fn ensureBits(self: *Self, n: u6) !void {
+            if (n > self.eos) {
+                self.moreBits();
+                if (n > self.eos) return error.EndOfStream;
+            }
         }
 
         inline fn moreBits(self: *Self) void {
@@ -101,14 +80,43 @@ pub fn BitReader(comptime ReaderType: type) type {
             }
         }
 
-        pub inline fn skipBytes(self: *Self, n: u3) void {
-            for (0..n) |_| self.advance(8);
+        pub inline fn peek15(self: *Self) !u16 {
+            try self.ensureBits(15);
+            const u: u15 = @truncate(self.bits);
+            return @bitReverse(u);
         }
 
+        pub inline fn peek7(self: *Self) !u16 {
+            try self.ensureBits(7);
+            const n: u7 = @truncate(self.bits);
+            return @bitReverse(n);
+        }
+
+        pub fn peek(self: *Self, comptime U: type) !U {
+            const n: u4 = @bitSizeOf(U);
+            try self.ensureBits(n);
+            return @truncate(self.bits);
+        }
+
+        pub inline fn advance(self: *Self, n: u6) void {
+            assert(n <= self.eos);
+            self.bits >>= n;
+            self.eos -= n;
+        }
+
+        pub inline fn skipBytes(self: *Self, n: u3) !void {
+            for (0..n) |_| {
+                try self.ensureBits(8);
+                self.advance(8);
+            }
+        }
+
+        // Number of bits to align stream to the byte boundary.
         inline fn alignBits(self: *Self) u3 {
             return @intCast(self.eos % 8);
         }
 
+        // Align stream to the byte boundary.
         pub inline fn alignToByte(self: *Self) void {
             const ab = self.alignBits();
             if (ab > 0) self.advance(ab);
