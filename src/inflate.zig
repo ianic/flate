@@ -138,7 +138,7 @@ fn Inflate(comptime ReaderType: type) type {
             for (0..hclen) |i| {
                 cl_l[order[i]] = try self.rdr.read(u3);
             }
-            self.cl_h.init(&cl_l);
+            self.cl_h.build(&cl_l);
 
             // literal code lengths
             var lit_l = [_]u4{0} ** (286);
@@ -158,8 +158,8 @@ fn Inflate(comptime ReaderType: type) type {
                 pos += try self.dynamicCodeLength(sym.symbol, &dst_l, pos);
             }
 
-            self.lit_h.init(&lit_l);
-            self.dst_h.init(&dst_l);
+            self.lit_h.build(&lit_l);
+            self.dst_h.build(&dst_l);
         }
 
         fn dynamicBlock(self: *Self) !bool {
