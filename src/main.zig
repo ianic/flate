@@ -11,13 +11,24 @@ pub fn main() !void {
     defer file.close();
     var br = std.io.bufferedReader(file.reader());
 
-    //const stdout = std.io.getStdOut();
+    const stdout = std.io.getStdOut();
     var il = inflate(br.reader());
-    while (true) {
-        const buf = try il.read();
-        if (buf.len == 0) return;
-        // try stdout.writeAll(buf);
+
+    var n: usize = 0;
+    while (try il.nextChunk()) |buf| {
+        n += buf.len;
+        try stdout.writeAll(buf);
     }
+
+    // var buf: [128 * 1024]u8 = undefined;
+    // var rdr = il.reader();
+    // while (true) {
+    //     const n = try rdr.readAll(&buf);
+    //     std.debug.print("{d} ", .{n});
+    //     if (n == 0) return;
+    //     try stdout.writeAll(buf[0..n]);
+    //     if (n < buf.len) return;
+    // }
 }
 
 pub fn _main() !void {
@@ -35,17 +46,15 @@ pub fn _main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    //const stdout = std.io.getStdOut();
+    const stdout = std.io.getStdOut();
     var il = try std.compress.gzip.decompress(allocator, br.reader());
     var rdr = il.reader();
 
     var buf: [4096]u8 = undefined;
     while (true) {
-        const n = rdr.readAll(&buf) catch |err| {
-            if (err == error.EndOfStream) return;
-            unreachable;
-        };
+        const n = try rdr.readAll(&buf);
+        std.debug.print("{d} ", .{n});
         if (n == 0) return;
-        //try stdout.writeAll(buf[0..n]);
+        try stdout.writeAll(buf[0..n]);
     }
 }
