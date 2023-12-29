@@ -20,7 +20,7 @@ pub fn BitReader(comptime ReaderType: type) type {
             return self;
         }
 
-        pub fn read(self: *Self, comptime U: type) !U {
+        pub inline fn read(self: *Self, comptime U: type) !U {
             const bit_count: u4 = @bitSizeOf(U);
             if (bit_count > self.eos) return error.EndOfStream;
             const v: U = @truncate(self.bits);
@@ -28,7 +28,7 @@ pub fn BitReader(comptime ReaderType: type) type {
             return v;
         }
 
-        pub fn readBits(self: *Self, n: u4) !u16 {
+        pub inline fn readBits(self: *Self, n: u4) !u16 {
             if (n == 0) return 0;
             const mask: u16 = @as(u16, 0xffff) >> (15 - n + 1);
             const v: u16 = @as(u16, @truncate(self.bits)) & mask;
@@ -40,33 +40,37 @@ pub fn BitReader(comptime ReaderType: type) type {
             return @bitReverse(try self.read(U));
         }
 
-        pub fn readByte(self: *Self) !u8 {
-            assert(self.eos >= 8);
+        pub inline fn readU8(self: *Self) !u8 {
+            // assert(self.eos >= 8);
+            if (self.eos < 8) return error.EndOfStream;
             const v: u8 = @truncate(self.bits);
-            self.advanceBytes(1);
+            // self.advanceBytes(1);
+            self.advance(8);
             return v;
         }
 
-        pub fn readU32(self: *Self) !u32 {
+        pub inline fn readU32(self: *Self) !u32 {
             assert(self.eos >= 32);
             const v: u32 = @truncate(self.bits);
-            self.advanceBytes(4);
+            //self.advanceBytes(4);
+            self.advance(32);
             return v;
         }
 
-        pub fn readU16(self: *Self) !u16 {
+        pub inline fn readU16(self: *Self) !u16 {
             assert(self.eos >= 16);
             const v: u16 = @truncate(self.bits);
-            self.advanceBytes(2);
+            //self.advanceBytes(2);
+            self.advance(16);
             return v;
         }
 
-        pub fn peek15(self: *Self) u16 {
+        pub inline fn peek15(self: *Self) u16 {
             const v: u15 = @truncate(self.bits);
             return @bitReverse(v);
         }
 
-        pub fn peek7(self: *Self) u16 {
+        pub inline fn peek7(self: *Self) u16 {
             const v: u7 = @truncate(self.bits);
             return @bitReverse(v);
         }
@@ -77,7 +81,7 @@ pub fn BitReader(comptime ReaderType: type) type {
             return @truncate(self.bits);
         }
 
-        pub fn advance(self: *Self, n: u4) void {
+        pub inline fn advance(self: *Self, n: u6) void {
             assert(n <= self.eos);
 
             self.bits >>= n;
@@ -87,34 +91,27 @@ pub fn BitReader(comptime ReaderType: type) type {
                 self.moreBits(); // refill upper byte(s)
         }
 
-        pub fn skipBytes(self: *Self, n: u3) void {
-            self.advanceBytes(n);
+        inline fn moreBits(self: *Self) void {
+            var buf: [8]u8 = undefined;
+            const empty_bytes = 7 - (self.eos >> 3); // 8 - (self.eos / 8)
+            const bytes_read = self.rdr.read(buf[0..empty_bytes]) catch 0;
+            for (0..bytes_read) |i| {
+                self.bits |= @as(u64, buf[i]) << @as(u6, @intCast(self.eos));
+                self.eos += 8;
+            }
         }
 
-        inline fn advanceBytes(self: *Self, n: u3) void {
-            for (0..n) |_| {
-                self.bits >>= 8;
-                self.eos -= 8;
-                self.moreBits();
-            }
+        pub inline fn skipBytes(self: *Self, n: u3) void {
+            for (0..n) |_| self.advance(8);
         }
 
         inline fn alignBits(self: *Self) u3 {
             return @intCast(self.eos % 8);
         }
 
-        pub fn alignToByte(self: *Self) void {
+        pub inline fn alignToByte(self: *Self) void {
             const ab = self.alignBits();
-            if (ab > 0)
-                self.advance(ab);
-        }
-
-        inline fn moreBits(self: *Self) void {
-            while (self.eos <= 7 * 8) {
-                const b = self.rdr.readByte() catch return;
-                self.bits |= @as(u64, b) << @as(u6, @intCast(self.eos));
-                self.eos += 8;
-            }
+            if (ab > 0) self.advance(ab);
         }
     };
 }

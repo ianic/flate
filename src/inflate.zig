@@ -56,9 +56,9 @@ fn Inflate(comptime ReaderType: type) type {
         }
 
         fn gzipHeader(self: *Self) !void {
-            const magic1 = try self.rdr.readByte();
-            const magic2 = try self.rdr.readByte();
-            const method = try self.rdr.readByte();
+            const magic1 = try self.rdr.readU8();
+            const magic2 = try self.rdr.readU8();
+            const method = try self.rdr.readU8();
             self.rdr.skipBytes(7); // flags, mtime(4), xflags, os
             if (magic1 != 0x1f or magic2 != 0x8b or method != 0x08)
                 return error.InvalidGzipHeader;
@@ -80,12 +80,12 @@ fn Inflate(comptime ReaderType: type) type {
 
             if (len != ~nlen) return error.DeflateWrongNlen;
             for (0..len) |_| {
-                self.win.write(try self.rdr.readByte());
+                self.win.write(try self.rdr.readU8());
             }
             return true;
         }
 
-        fn windowFull(self: *Self) bool {
+        inline fn windowFull(self: *Self) bool {
             // 258 is largest back reference length.
             // That much bytes can be produced in single step.
             return self.win.free() < 258 + 1;
