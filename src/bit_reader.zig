@@ -20,82 +20,54 @@ pub fn BitReader(comptime ReaderType: type) type {
             return self;
         }
 
+        // Ensure that n bits are available in buffer.
+        // Reads from underlaying reader if more bits are needed.
+        // Returns error if not enough bits found.
+        inline fn ensureBits(self: *Self, n: u6) !void {
+            if (n > self.eos) {
+                // read more bits from underlaying reader
+                var buf: [8]u8 = undefined;
+                const empty_bytes = 7 - (self.eos >> 3); // 8 - (self.eos / 8)
+                const bytes_read = self.rdr.read(buf[0..empty_bytes]) catch 0;
+                for (0..bytes_read) |i| {
+                    self.bits |= @as(u64, buf[i]) << @as(u6, @intCast(self.eos));
+                    self.eos += 8;
+                }
+                // than check again
+                if (n > self.eos) return error.EndOfStream;
+            }
+        }
+
+        // Read bit size of U number of bits and advance stream.
         pub inline fn read(self: *Self, comptime U: type) !U {
-            const n: u4 = @bitSizeOf(U);
+            const n: u6 = @bitSizeOf(U);
             try self.ensureBits(n);
             const u: U = @truncate(self.bits);
             self.advance(n);
             return u;
         }
 
-        pub inline fn readBits(self: *Self, n: u4) !u16 {
-            if (n == 0) return 0;
-            try self.ensureBits(n);
+        // Literals are read in reverse bit order.
+        pub inline fn readLiteral(self: *Self, comptime U: type) !U {
+            return @bitReverse(try self.read(U));
+        }
 
+        pub inline fn readBits(self: *Self, n: u4) !u16 {
+            try self.ensureBits(n);
             const mask: u16 = @as(u16, 0xffff) >> (15 - n + 1);
             const u: u16 = @as(u16, @truncate(self.bits)) & mask;
             self.advance(n);
             return u;
         }
 
-        pub inline fn readLiteral(self: *Self, comptime U: type) !U {
-            return @bitReverse(try self.read(U));
-        }
-
-        pub inline fn readU8(self: *Self) !u8 {
-            try self.ensureBits(8);
-            const u: u8 = @truncate(self.bits);
-            self.advance(8);
-            return u;
-        }
-
-        pub inline fn readU32(self: *Self) !u32 {
-            try self.ensureBits(32);
-            const u: u32 = @truncate(self.bits);
-            self.advance(32);
-            return u;
-        }
-
-        pub inline fn readU16(self: *Self) !u16 {
-            try self.ensureBits(16);
-            const u: u16 = @truncate(self.bits);
-            self.advance(16);
-            return u;
-        }
-
-        inline fn ensureBits(self: *Self, n: u6) !void {
-            if (n > self.eos) {
-                self.moreBits();
-                if (n > self.eos) return error.EndOfStream;
-            }
-        }
-
-        inline fn moreBits(self: *Self) void {
-            var buf: [8]u8 = undefined;
-            const empty_bytes = 7 - (self.eos >> 3); // 8 - (self.eos / 8)
-            const bytes_read = self.rdr.read(buf[0..empty_bytes]) catch 0;
-            for (0..bytes_read) |i| {
-                self.bits |= @as(u64, buf[i]) << @as(u6, @intCast(self.eos));
-                self.eos += 8;
-            }
-        }
-
-        pub inline fn peek15(self: *Self) !u16 {
-            try self.ensureBits(15);
-            const u: u15 = @truncate(self.bits);
-            return @bitReverse(u);
-        }
-
-        pub inline fn peek7(self: *Self) !u16 {
-            try self.ensureBits(7);
-            const n: u7 = @truncate(self.bits);
-            return @bitReverse(n);
-        }
-
-        pub fn peek(self: *Self, comptime U: type) !U {
+        pub inline fn peek(self: *Self, comptime U: type) !U {
             const n: u4 = @bitSizeOf(U);
             try self.ensureBits(n);
             return @truncate(self.bits);
+        }
+
+        pub inline fn peekLiteral(self: *Self, comptime U: type) !U {
+            return @bitReverse(try self.peek(U));
         }
 
         pub inline fn advance(self: *Self, n: u6) void {
@@ -176,7 +148,7 @@ test "BitReader read block type 1 data" {
     }
     try testing.expectEqual(@as(u7, 0), try br.read(u7)); // end of block
     br.alignToByte();
-    try testing.expectEqual(@as(u32, 0x0302010c), try br.readU32());
-    try testing.expectEqual(@as(u16, 0xbbaa), try br.readU16());
-    try testing.expectEqual(@as(u16, 0xddcc), try br.readU16());
+    try testing.expectEqual(@as(u32, 0x0302010c), try br.read(u32));
+    try testing.expectEqual(@as(u16, 0xbbaa), try br.read(u16));
+    try testing.expectEqual(@as(u16, 0xddcc), try br.read(u16));
 }
