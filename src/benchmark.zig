@@ -4,24 +4,63 @@ const assert = std.debug.assert;
 
 const data = @embedFile("testdata/bb0f7d55e8c50e379fa9bdcb8758d89d08e0cc1f.tar.gz");
 const data_bytes = 177244160;
+const buffer_len = 1024 * 4;
 
 // const data = @embedFile("testdata/2600.txt.utf-8.gz");
 // const data_bytes = 3359630;
 
-pub fn main() !void {
-    //for (0..16) |_| try profile();
-
-    const argv = std.os.argv;
-    if (argv.len == 1) {
-        try proj();
-    } else {
-        try std_lib();
-    }
+fn usage() void {
+    std.debug.print(
+        \\benchmark [options]
+        \\
+        \\Options:
+        \\  --std
+        \\  --profile
+        \\  --help
+        \\
+    , .{});
 }
 
-const buffer_len = 1024 * 64;
+pub fn main() !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+    const args = try std.process.argsAlloc(arena_allocator);
 
-fn proj() !void {
+    var i: usize = 1;
+    while (i < args.len) : (i += 1) {
+        if (std.mem.eql(u8, args[i], "--std")) {
+            try stdLibVersion();
+            return;
+        } else if (std.mem.eql(u8, args[i], "--profile")) {
+            try profile();
+            return;
+        } else if (std.mem.eql(u8, args[i], "--zero-copy")) {
+            try zeroCopy();
+            return;
+        } else if (std.mem.eql(u8, args[i], "--help")) {
+            usage();
+            return;
+        } else {
+            usage();
+            std.os.exit(1);
+        }
+    }
+    try readerInterface();
+}
+
+fn zeroCopy() !void {
+    var fbs = std.io.fixedBufferStream(data);
+    var inf = inflate(fbs.reader());
+    var n: usize = 0;
+
+    while (try inf.nextChunk()) |buf| {
+        n += buf.len;
+    }
+    assert(n == data_bytes);
+}
+
+fn readerInterface() !void {
     var fbs = std.io.fixedBufferStream(data);
     var inf = inflate(fbs.reader());
     var n: usize = 0;
@@ -41,7 +80,7 @@ fn proj() !void {
     assert(n == data_bytes);
 }
 
-pub fn std_lib() !void {
+pub fn stdLibVersion() !void {
     var fbs = std.io.fixedBufferStream(data);
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -62,12 +101,7 @@ pub fn std_lib() !void {
 }
 
 fn profile() !void {
-    var fbs = std.io.fixedBufferStream(data);
-    var inf = inflate(fbs.reader());
-    var n: usize = 0;
-
-    while (try inf.nextChunk()) |buf| {
-        n += buf.len;
+    for (0..16) |_| {
+        try zeroCopy();
     }
-    assert(n == data_bytes);
 }
