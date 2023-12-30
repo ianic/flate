@@ -169,25 +169,24 @@ fn Inflate(comptime ReaderType: type) type {
                 self.rdr.advance(sym.code_bits);
 
                 const code = sym.symbol;
+                if (code < 256) {
+                    // literal
+                    self.win.write(@intCast(code));
+                    continue;
+                }
                 if (code == 256) {
                     // end of block
                     return true;
                 }
-                if (code > 256) {
-                    try self.rdr.ensureBits(33);
+                // decode backward pointer <length, distance>
+                try self.rdr.ensureBits(33);
+                const length = try self.decodeLength(code);
 
-                    // decode backward pointer <length, distance>
-                    const length = try self.decodeLength(code);
+                const dsm = self.dst_h.find(self.rdr.peekLiteralE(u15)); // distance symbol
+                self.rdr.advance(dsm.code_bits);
 
-                    const dsm = self.dst_h.find(self.rdr.peekLiteralE(u15)); // distance symbol
-                    self.rdr.advance(dsm.code_bits);
-
-                    const distance = try self.decodeDistance(dsm.symbol);
-                    self.win.writeCopy(length, distance);
-                } else {
-                    // literal
-                    self.win.write(@intCast(code));
-                }
+                const distance = try self.decodeDistance(dsm.symbol);
+                self.win.writeCopy(length, distance);
             }
             return false;
         }
