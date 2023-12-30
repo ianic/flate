@@ -83,7 +83,6 @@ fn Inflate(comptime ReaderType: type) type {
             self.rdr.alignToByte(); // skip 5 bits
             const len = try self.rdr.read(u16);
             const nlen = try self.rdr.read(u16);
-
             if (len != ~nlen) return error.DeflateWrongNlen;
             for (0..len) |_| {
                 self.win.write(try self.rdr.read(u8));
