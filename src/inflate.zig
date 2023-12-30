@@ -43,8 +43,8 @@ fn Inflate(comptime ReaderType: type) type {
             return .{ .rdr = BitReaderType.init(rt) };
         }
 
-        inline fn decodeLength(self: *Self, code: u16) !u16 {
-            assert(code >= 256 and code <= 285);
+        inline fn decodeLength(self: *Self, code: u8) !u16 {
+            assert(code <= 28);
             const bl = backwardLength(code);
             return if (bl.extra_bits == 0)
                 bl.base_length
@@ -52,7 +52,7 @@ fn Inflate(comptime ReaderType: type) type {
                 bl.base_length + self.rdr.readBitsE(bl.extra_bits);
         }
 
-        inline fn decodeDistance(self: *Self, code: u16) !u16 {
+        inline fn decodeDistance(self: *Self, code: u8) !u16 {
             assert(code <= 29);
             const bd = backwardDistance(code);
             return if (bd.extra_bits == 0)
@@ -123,7 +123,7 @@ fn Inflate(comptime ReaderType: type) type {
         // Length code is followed by 5 bits of distance code.
         fn fixedDistanceCode(self: *Self, code: u16) !void {
             try self.rdr.ensureBits(5 + 5 + 13);
-            const length = try self.decodeLength(code);
+            const length = try self.decodeLength(@intCast(code - 257));
             const distance = try self.decodeDistance(self.rdr.readE(u5));
             self.win.writeCopy(length, distance);
         }
@@ -168,19 +168,18 @@ fn Inflate(comptime ReaderType: type) type {
                 const sym = self.lit_h.find(try self.rdr.peekLiteral(u15));
                 self.rdr.advance(sym.code_bits);
 
-                const code = sym.symbol;
-                if (code < 256) {
-                    // literal
-                    self.win.write(@intCast(code));
+                if (sym.kind == .literal) {
+                    self.win.write(sym.symbol);
                     continue;
                 }
-                if (code == 256) {
+                if (sym.kind == .end_of_block) {
                     // end of block
                     return true;
                 }
+
                 // decode backward pointer <length, distance>
                 try self.rdr.ensureBits(33);
-                const length = try self.decodeLength(code);
+                const length = try self.decodeLength(sym.symbol);
 
                 const dsm = self.dst_h.find(self.rdr.peekLiteralE(u15)); // distance symbol
                 self.rdr.advance(dsm.code_bits);
@@ -294,7 +293,7 @@ fn Inflate(comptime ReaderType: type) type {
 }
 
 fn backwardLength(c: u16) BackwardLength {
-    return backward_lengths[c - 257];
+    return backward_lengths[c];
 }
 
 const BackwardLength = struct {
@@ -334,7 +333,7 @@ const backward_lengths = [_]BackwardLength{
     .{ .extra_bits = 0, .base_length = 258 }, // code = 285
 };
 
-fn backwardDistance(c: u16) BackwardDistance {
+fn backwardDistance(c: u8) BackwardDistance {
     return backward_distances[c];
 }
 
