@@ -49,7 +49,7 @@ fn Inflate(comptime ReaderType: type) type {
             return if (bl.extra_bits == 0)
                 bl.base_length
             else
-                bl.base_length + try self.rdr.readBits(bl.extra_bits);
+                bl.base_length + self.rdr.readBitsE(bl.extra_bits);
         }
 
         inline fn decodeDistance(self: *Self, code: u16) !u16 {
@@ -58,7 +58,7 @@ fn Inflate(comptime ReaderType: type) type {
             return if (bd.extra_bits == 0)
                 bd.base_distance
             else
-                bd.base_distance + try self.rdr.readBits(bd.extra_bits);
+                bd.base_distance + self.rdr.readBitsE(bd.extra_bits);
         }
 
         fn gzipHeader(self: *Self) !void {
@@ -98,20 +98,21 @@ fn Inflate(comptime ReaderType: type) type {
 
         fn fixedBlock(self: *Self) !bool {
             while (!self.windowFull()) {
-                const code7 = try self.rdr.readLiteral(u7);
+                try self.rdr.ensureBits(7 + 2);
+                const code7 = self.rdr.readLiteralE(u7);
 
                 if (code7 < 0b0010_111) { // 7 bits, 256-279, codes 0000_000 - 0010_111
                     if (code7 == 0) return true; // end of block code 256
                     const code: u16 = @as(u16, code7) + 256;
                     try self.fixedDistanceCode(code);
                 } else if (code7 < 0b1011_111) { // 8 bits, 0-143, codes 0011_0000 through 1011_1111
-                    const lit: u8 = (@as(u8, code7 - 0b0011_000) << 1) + try self.rdr.read(u1);
+                    const lit: u8 = (@as(u8, code7 - 0b0011_000) << 1) + self.rdr.readE(u1);
                     self.win.write(lit);
                 } else if (code7 <= 0b1100_011) { // 8 bit, 280-287, codes 1100_0000 - 1100_0111
-                    const code: u16 = (@as(u16, code7 - 0b1100011) << 1) + try self.rdr.read(u1) + 280;
+                    const code: u16 = (@as(u16, code7 - 0b1100011) << 1) + self.rdr.readE(u1) + 280;
                     try self.fixedDistanceCode(code);
                 } else { // 9 bit, 144-255, codes 1_1001_0000 - 1_1111_1111
-                    const lit: u8 = (@as(u8, code7 - 0b1100_100) << 2) + try self.rdr.readLiteral(u2) + 144;
+                    const lit: u8 = (@as(u8, code7 - 0b1100_100) << 2) + self.rdr.readLiteralE(u2) + 144;
                     self.win.write(lit);
                 }
             }
@@ -121,8 +122,9 @@ fn Inflate(comptime ReaderType: type) type {
         // Handles fixed block non literal (length) code.
         // Length code is followed by 5 bits of distance code.
         fn fixedDistanceCode(self: *Self, code: u16) !void {
+            try self.rdr.ensureBits(5 + 5 + 13);
             const length = try self.decodeLength(code);
-            const distance = try self.decodeDistance(try self.rdr.read(u5));
+            const distance = try self.decodeDistance(self.rdr.readE(u5));
             self.win.writeCopy(length, distance);
         }
 
@@ -172,10 +174,12 @@ fn Inflate(comptime ReaderType: type) type {
                     return true;
                 }
                 if (code > 256) {
+                    try self.rdr.ensureBits(33);
+
                     // decode backward pointer <length, distance>
                     const length = try self.decodeLength(code);
 
-                    const dsm = self.dst_h.find(try self.rdr.peekLiteral(u15)); // distance symbol
+                    const dsm = self.dst_h.find(self.rdr.peekLiteralE(u15)); // distance symbol
                     self.rdr.advance(dsm.code_bits);
 
                     const distance = try self.decodeDistance(dsm.symbol);

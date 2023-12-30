@@ -23,7 +23,7 @@ pub fn BitReader(comptime ReaderType: type) type {
         // Ensure that n bits are available in buffer.
         // Reads from underlaying reader if more bits are needed.
         // Returns error if not enough bits found.
-        inline fn ensureBits(self: *Self, n: u6) !void {
+        pub inline fn ensureBits(self: *Self, n: u6) !void {
             if (n > self.eos) {
                 // read more bits from underlaying reader
                 var buf: [8]u8 = undefined;
@@ -47,13 +47,31 @@ pub fn BitReader(comptime ReaderType: type) type {
             return u;
         }
 
+        pub inline fn readE(self: *Self, comptime U: type) U {
+            const n: u6 = @bitSizeOf(U);
+            const u: U = @truncate(self.bits);
+            self.advance(n);
+            return u;
+        }
+
         // Literals are read in reverse bit order.
         pub inline fn readLiteral(self: *Self, comptime U: type) !U {
             return @bitReverse(try self.read(U));
         }
 
+        pub inline fn readLiteralE(self: *Self, comptime U: type) U {
+            return @bitReverse(self.readE(U));
+        }
+
         pub inline fn readBits(self: *Self, n: u4) !u16 {
             try self.ensureBits(n);
+            const mask: u16 = @as(u16, 0xffff) >> (15 - n + 1);
+            const u: u16 = @as(u16, @truncate(self.bits)) & mask;
+            self.advance(n);
+            return u;
+        }
+
+        pub inline fn readBitsE(self: *Self, n: u4) u16 {
             const mask: u16 = @as(u16, 0xffff) >> (15 - n + 1);
             const u: u16 = @as(u16, @truncate(self.bits)) & mask;
             self.advance(n);
@@ -66,8 +84,16 @@ pub fn BitReader(comptime ReaderType: type) type {
             return @truncate(self.bits);
         }
 
+        pub inline fn peekE(self: *Self, comptime U: type) U {
+            return @truncate(self.bits);
+        }
+
         pub inline fn peekLiteral(self: *Self, comptime U: type) !U {
             return @bitReverse(try self.peek(U));
+        }
+
+        pub inline fn peekLiteralE(self: *Self, comptime U: type) U {
+            return @bitReverse(@as(U, @truncate(self.bits)));
         }
 
         pub inline fn advance(self: *Self, n: u6) void {
