@@ -39,9 +39,9 @@ pub fn Huffman(comptime alphabet_size: u16) type {
         // all symbols in alaphabet, sorted by code_len, symbol
         symbols: [alphabet_size]Symbol = undefined,
         // lookup table code -> symbol index
-        lookup: [2 << max_code_bits]Symbol = undefined,
+        lookup: [1 << max_code_bits]Symbol = undefined,
         // small lookup table
-        lookup_s: [2 << small_lookup_bits]Symbol = undefined,
+        lookup_s: [1 << small_lookup_bits]Symbol = undefined,
 
         const Self = @This();
 
@@ -171,4 +171,14 @@ test "Huffman init/find" {
 
     for (0b1111_000..0b1_0000_000) |c| // 120...128 (8)
         try testing.expectEqual(@as(u16, 16), h.find(@intCast(c)).symbol);
+}
+
+test "inspect sizes" {
+    if (true) return error.SkipZigTest;
+    std.debug.print("\n{d}\n", .{@bitSizeOf(Symbol)});
+    std.debug.print("{d}\n", .{@sizeOf(Symbol)});
+    std.debug.print("{d}\n", .{@sizeOf([1 << 15]Symbol) / 1024});
+    std.debug.print("{d}\n", .{@sizeOf([1 << 15]u8) / 1024});
+    std.debug.print("{d}\n", .{@sizeOf(Huffman(286)) / 1024});
+    std.debug.print("{d}\n", .{@sizeOf(Huffman(286))});
 }
