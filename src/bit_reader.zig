@@ -65,14 +65,14 @@ pub fn BitReader(comptime ReaderType: type) type {
 
         pub inline fn readBits(self: *Self, n: u4) !u16 {
             try self.ensureBits(n);
-            const mask: u16 = @as(u16, 0xffff) >> (15 - n + 1);
+            const mask: u16 = (@as(u16, 1) << n) - 1;
             const u: u16 = @as(u16, @truncate(self.bits)) & mask;
             self.advance(n);
             return u;
         }
 
         pub inline fn readBitsE(self: *Self, n: u4) u16 {
-            const mask: u16 = @as(u16, 0xffff) >> (15 - n + 1);
+            const mask: u16 = (@as(u16, 1) << n) - 1;
             const u: u16 = @as(u16, @truncate(self.bits)) & mask;
             self.advance(n);
             return u;
