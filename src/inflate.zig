@@ -103,13 +103,13 @@ fn Inflate(comptime ReaderType: type) type {
 
                 if (code7 < 0b0010_111) { // 7 bits, 256-279, codes 0000_000 - 0010_111
                     if (code7 == 0) return true; // end of block code 256
-                    const code: u16 = @as(u16, code7) + 256;
-                    try self.fixedDistanceCode(code);
+                    try self.fixedDistanceCode(code7);
                 } else if (code7 < 0b1011_111) { // 8 bits, 0-143, codes 0011_0000 through 1011_1111
                     const lit: u8 = (@as(u8, code7 - 0b0011_000) << 1) + self.rdr.readE(u1);
                     self.win.write(lit);
                 } else if (code7 <= 0b1100_011) { // 8 bit, 280-287, codes 1100_0000 - 1100_0111
-                    const code: u16 = (@as(u16, code7 - 0b1100011) << 1) + self.rdr.readE(u1) + 280;
+                    // TODO hit this branch in test
+                    const code: u8 = (@as(u8, code7 - 0b1100011) << 1) + self.rdr.readE(u1) + (280 - 257);
                     try self.fixedDistanceCode(code);
                 } else { // 9 bit, 144-255, codes 1_1001_0000 - 1_1111_1111
                     const lit: u8 = (@as(u8, code7 - 0b1100_100) << 2) + self.rdr.readLiteralE(u2) + 144;
@@ -121,9 +121,9 @@ fn Inflate(comptime ReaderType: type) type {
 
         // Handles fixed block non literal (length) code.
         // Length code is followed by 5 bits of distance code.
-        fn fixedDistanceCode(self: *Self, code: u16) !void {
+        fn fixedDistanceCode(self: *Self, code: u8) !void {
             try self.rdr.ensureBits(5 + 5 + 13);
-            const length = try self.decodeLength(@intCast(code - 257));
+            const length = try self.decodeLength(code);
             const distance = try self.decodeDistance(self.rdr.readE(u5));
             self.win.writeCopy(length, distance);
         }
