@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 
-const Symbol = struct {
+const Symbol = packed struct {
     symbol: u16, // symbol from alphabet
     code_bits: u4, // code bits count
 
@@ -26,7 +26,6 @@ pub fn Huffman(comptime alphabet_size: u16) type {
         else => unreachable,
     };
     const small_lookup_shift = max_code_bits - small_lookup_bits;
-    const lookup_not_found = 0xffff;
 
     return struct {
         // all symbols in alaphabet, sorted by code_len, symbol
@@ -51,35 +50,49 @@ pub fn Huffman(comptime alphabet_size: u16) type {
             // reference: https://youtu.be/9_YEGLe33NA?list=PLU4IQLU9e_OrY8oASHx0u3IXAL9TOdidm&t=2639
             var code: u16 = 0;
             var code_s: u16 = 0;
-            for (self.symbols, 0..) |sym, i| {
+            for (self.symbols) |sym| {
                 if (sym.code_bits == 0) continue; // skip unused
 
                 const next = code + (@as(u16, 1) << (max_code_bits - sym.code_bits));
 
+                const u: u16 = (@as(u16, @intCast(sym.code_bits)) << 12) + sym.symbol;
+
                 if (sym.code_bits <= small_lookup_bits) {
                     const next_s = next >> small_lookup_shift;
                     for (code_s..next_s) |j|
-                        self.lookup_s[j] = @intCast(i);
+                        self.lookup_s[j] = u; //sym;
                     code_s = next_s;
                 } else {
                     // assign symbol index to all codes between current and next code
                     for (code..next) |j|
-                        self.lookup[j] = @intCast(i);
+                        self.lookup[j] = u;
                 }
                 code = next;
             }
             for (code_s..self.lookup_s.len) |i|
+                // self.lookup_s[i].code_bits = 0;
                 self.lookup_s[i] = lookup_not_found;
         }
+
+        const lookup_not_found = 0xffff;
 
         /// Finds symbol for lookup table code.
         pub inline fn find(self: *Self, code: u16) Symbol {
             if (small_lookup_bits > 0) {
                 const code_s = code >> small_lookup_shift;
-                const idx = self.lookup_s[code_s];
-                if (idx != lookup_not_found) return self.symbols[idx];
+                //const sym = self.lookup_s[code_s];
+                //if (sym.code_bits != 0) return sym;
+                const u = self.lookup_s[code_s];
+                if (u != lookup_not_found) return Symbol{
+                    .symbol = u & 0x01_ff,
+                    .code_bits = @intCast(u >> 12),
+                };
             }
-            return self.symbols[self.lookup[code]];
+            const u: u16 = self.lookup[code];
+            return Symbol{
+                .symbol = u & 0x01_ff,
+                .code_bits = @intCast(u >> 12),
+            };
         }
     };
 }
@@ -158,3 +171,21 @@ test "Huffman init/find" {
     for (0b1111_000..0b1_0000_000) |c| // 120...128 (8)
         try testing.expectEqual(@as(u16, 16), h.find(@intCast(c)).symbol);
 }
+
+test "koliko to ima" {
+    std.debug.print("\n{d}\n", .{@bitSizeOf(Symbol)});
+    std.debug.print("{d}\n", .{@sizeOf(Symbol)});
+    std.debug.print("{d}\n", .{@offsetOf(Symbol, "code_bits")});
+    std.debug.print("{d}\n", .{@bitOffsetOf(Symbol, "code_bits")});
+
+    std.debug.print("\n{d}\n", .{@bitSizeOf(Symbol2)});
+    std.debug.print("{d}\n", .{@sizeOf(Symbol2)});
+    std.debug.print("{d}\n", .{@offsetOf(Symbol2, "code_bits")});
+    std.debug.print("{d}\n", .{@bitOffsetOf(Symbol2, "code_bits")});
+}
+
+const Symbol2 = packed struct {
+    symbol: u8, // symbol from alphabet
+    code_bits: u4, // code bits count
+    typ: u1,
+};

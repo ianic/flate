@@ -2,8 +2,8 @@ const std = @import("std");
 const inflate = @import("inflate.zig").inflate;
 const assert = std.debug.assert;
 
-// const data = @embedFile("testdata/bb0f7d55e8c50e379fa9bdcb8758d89d08e0cc1f.tar.gz");
-// const data_bytes = 177244160;
+const data = @embedFile("testdata/bb0f7d55e8c50e379fa9bdcb8758d89d08e0cc1f.tar.gz");
+const data_bytes = 177244160;
 
 // const data = @embedFile("testdata/2600.txt.utf-8.gz");
 // const data_bytes = 3359630;
@@ -11,10 +11,10 @@ const assert = std.debug.assert;
 // const data = @embedFile("testdata/cantrbry.tar.gz");
 // const data_bytes = 2821120;
 
-const data = @embedFile("testdata/large.tar.gz");
-const data_bytes = 11162624;
+// const data = @embedFile("testdata/large.tar.gz");
+// const data_bytes = 11162624;
 
-const buffer_len = 1024 * 4;
+const buffer_len = 1024 * 64;
 
 fn usage() void {
     std.debug.print(
@@ -71,11 +71,6 @@ fn readerInterface() !void {
     var fbs = std.io.fixedBufferStream(data);
     var inf = inflate(fbs.reader());
     var n: usize = 0;
-
-    // while (try inf.nextChunk()) |buf| {
-    //     n += buf.len;
-    // }
-    // assert(n == data_bytes);
 
     var buf: [buffer_len]u8 = undefined;
     var rdr = inf.reader();
