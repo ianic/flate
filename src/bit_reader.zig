@@ -26,12 +26,13 @@ pub fn BitReader(comptime ReaderType: type) type {
         pub inline fn ensureBits(self: *Self, n: u6) !void {
             if (n > self.eos) {
                 // read more bits from underlaying reader
-                var buf: [8]u8 = undefined;
-                const empty_bytes = 7 - (self.eos >> 3); // 8 - (self.eos / 8)
+                var buf: [8]u8 = [_]u8{0} ** 8;
+                const empty_bytes = if (self.eos == 0) 8 else 7 - (self.eos >> 3);
                 const bytes_read = self.rdr.read(buf[0..empty_bytes]) catch 0;
-                for (0..bytes_read) |i| {
-                    self.bits |= @as(u64, buf[i]) << @as(u6, @intCast(self.eos));
-                    self.eos += 8;
+                if (bytes_read > 0) {
+                    const u: u64 = std.mem.readInt(u64, buf[0..8], .little);
+                    self.bits |= u << @as(u6, @intCast(self.eos));
+                    self.eos += 8 * @as(u8, @intCast(bytes_read));
                 }
                 // than check again
                 if (n > self.eos) return error.EndOfStream;
