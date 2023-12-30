@@ -27,7 +27,11 @@ pub fn BitReader(comptime ReaderType: type) type {
             if (n > self.eos) {
                 // read more bits from underlaying reader
                 var buf: [8]u8 = [_]u8{0} ** 8;
-                const empty_bytes = if (self.eos == 0) 8 else 7 - (self.eos >> 3);
+
+                const empty_bytes =
+                    @as(u8, if (self.eos & 0x7 == 0) 8 else 7) - // 8 for 8, 16, 24..., 7 otherwise
+                    (self.eos >> 3); // 0 for 0-7, 1 for 8-16, ... same as % 8
+
                 const bytes_read = self.rdr.read(buf[0..empty_bytes]) catch 0;
                 if (bytes_read > 0) {
                     const u: u64 = std.mem.readInt(u64, buf[0..8], .little);
@@ -178,4 +182,29 @@ test "BitReader read block type 1 data" {
     try testing.expectEqual(@as(u32, 0x0302010c), try br.read(u32));
     try testing.expectEqual(@as(u16, 0xbbaa), try br.read(u16));
     try testing.expectEqual(@as(u16, 0xddcc), try br.read(u16));
+}
+
+test "BitReader init" {
+    const data = [_]u8{
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+    };
+    var fbs = std.io.fixedBufferStream(&data);
+    var br = bitReader(fbs.reader());
+
+    try testing.expectEqual(@as(u64, 0x08_07_06_05_04_03_02_01), br.bits);
+    br.advance(8);
+    try testing.expectEqual(@as(u64, 0x00_08_07_06_05_04_03_02), br.bits);
+    try br.ensureBits(60); // fill with 1 byte
+    try testing.expectEqual(@as(u64, 0x01_08_07_06_05_04_03_02), br.bits);
+    br.advance(8 * 4 + 4);
+    try testing.expectEqual(@as(u64, 0x00_00_00_00_00_10_80_70), br.bits);
+
+    try br.ensureBits(60); // fill with 4 bytes (shift by 4)
+    try testing.expectEqual(@as(u64, 0x00_50_40_30_20_10_80_70), br.bits);
+    try testing.expectEqual(@as(u8, 8 * 7 + 4), br.eos);
+
+    br.advance(@intCast(br.eos)); // clear buffer
+    try br.ensureBits(8); // refill with the rest of the bytes
+    try testing.expectEqual(@as(u64, 0x00_00_00_00_00_08_07_06), br.bits);
 }
