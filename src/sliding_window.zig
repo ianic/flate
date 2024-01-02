@@ -22,12 +22,12 @@ pub const SlidingWindow = struct {
     rp: usize = 0, // read position
     crc: std.hash.Crc32 = std.hash.Crc32.init(),
 
-    fn writeAll(self: *SlidingWindow, buf: []const u8) void {
+    pub inline fn writeAll(self: *SlidingWindow, buf: []const u8) void {
         for (buf) |c| self.write(c);
     }
 
     // Write single byte.
-    pub fn write(self: *SlidingWindow, b: u8) void {
+    pub inline fn write(self: *SlidingWindow, b: u8) void {
         assert(self.wp - self.rp < mask);
         self.buffer[self.wp & mask] = b;
         self.wp += 1;
@@ -61,6 +61,13 @@ pub const SlidingWindow = struct {
             to += 1;
             from += 1;
         }
+    }
+
+    pub fn getWritable(self: *SlidingWindow, n: usize) []u8 {
+        const wp = self.wp & mask;
+        const len = @min(n, buffer_len - wp);
+        self.wp += len;
+        return self.buffer[wp .. wp + len];
     }
 
     // Read available data. Can return part of the available data if it is

@@ -4,6 +4,7 @@ const testing = std.testing;
 const Huffman = @import("huffman.zig").Huffman;
 const BitReader = @import("bit_reader.zig").BitReader;
 const SlidingWindow = @import("sliding_window.zig").SlidingWindow;
+//const SlidingWindow = @import("write_buffer.zig").Buffer;
 
 pub fn inflate(reader: anytype) Inflate(@TypeOf(reader)) {
     return Inflate(@TypeOf(reader)).init(reader);
@@ -49,7 +50,7 @@ fn Inflate(comptime ReaderType: type) type {
             return if (bl.extra_bits == 0)
                 bl.base_length
             else
-                bl.base_length + self.rdr.readBitsE(bl.extra_bits);
+                bl.base_length + self.rdr.readBufferedBits(bl.extra_bits);
         }
 
         inline fn decodeDistance(self: *Self, code: u8) !u16 {
@@ -58,7 +59,7 @@ fn Inflate(comptime ReaderType: type) type {
             return if (bd.extra_bits == 0)
                 bd.base_distance
             else
-                bd.base_distance + self.rdr.readBitsE(bd.extra_bits);
+                bd.base_distance + self.rdr.readBufferedBits(bd.extra_bits);
         }
 
         fn gzipHeader(self: *Self) !void {
@@ -81,12 +82,19 @@ fn Inflate(comptime ReaderType: type) type {
 
         fn nonCompressedBlock(self: *Self) !bool {
             self.rdr.alignToByte(); // skip 5 bits
-            const len = try self.rdr.read(u16);
+            var len = try self.rdr.read(u16);
             const nlen = try self.rdr.read(u16);
             if (len != ~nlen) return error.DeflateWrongNlen;
-            for (0..len) |_| {
-                self.win.write(try self.rdr.read(u8));
+
+            while (len > 0) {
+                const buf = self.win.getWritable(len);
+                try self.rdr.readAll(buf);
+                len -= @intCast(buf.len);
             }
+
+            // for (0..len) |_| {
+            //     self.win.write(try self.rdr.read(u8));
+            // }
             return true;
         }
 
@@ -98,21 +106,21 @@ fn Inflate(comptime ReaderType: type) type {
 
         fn fixedBlock(self: *Self) !bool {
             while (!self.windowFull()) {
-                try self.rdr.ensureBits(7 + 2);
-                const code7 = self.rdr.readLiteralE(u7);
+                try self.rdr.ensureBits(7 + 2, 7);
+                const code7 = self.rdr.readBufferedCode(u7);
 
                 if (code7 < 0b0010_111) { // 7 bits, 256-279, codes 0000_000 - 0010_111
                     if (code7 == 0) return true; // end of block code 256
                     try self.fixedDistanceCode(code7);
                 } else if (code7 < 0b1011_111) { // 8 bits, 0-143, codes 0011_0000 through 1011_1111
-                    const lit: u8 = (@as(u8, code7 - 0b0011_000) << 1) + self.rdr.readE(u1);
+                    const lit: u8 = (@as(u8, code7 - 0b0011_000) << 1) + self.rdr.readBuffered(u1);
                     self.win.write(lit);
                 } else if (code7 <= 0b1100_011) { // 8 bit, 280-287, codes 1100_0000 - 1100_0111
                     // TODO hit this branch in test
-                    const code: u8 = (@as(u8, code7 - 0b1100011) << 1) + self.rdr.readE(u1) + (280 - 257);
+                    const code: u8 = (@as(u8, code7 - 0b1100011) << 1) + self.rdr.readBuffered(u1) + (280 - 257);
                     try self.fixedDistanceCode(code);
                 } else { // 9 bit, 144-255, codes 1_1001_0000 - 1_1111_1111
-                    const lit: u8 = (@as(u8, code7 - 0b1100_100) << 2) + self.rdr.readLiteralE(u2) + 144;
+                    const lit: u8 = (@as(u8, code7 - 0b1100_100) << 2) + self.rdr.readBufferedCode(u2) + 144;
                     self.win.write(lit);
                 }
             }
@@ -122,9 +130,9 @@ fn Inflate(comptime ReaderType: type) type {
         // Handles fixed block non literal (length) code.
         // Length code is followed by 5 bits of distance code.
         fn fixedDistanceCode(self: *Self, code: u8) !void {
-            try self.rdr.ensureBits(5 + 5 + 13);
+            try self.rdr.ensureBits(5 + 5 + 13, 5);
             const length = try self.decodeLength(code);
-            const distance = try self.decodeDistance(self.rdr.readE(u5));
+            const distance = try self.decodeDistance(self.rdr.readBuffered(u5));
             self.win.writeCopy(length, distance);
         }
 
@@ -145,7 +153,7 @@ fn Inflate(comptime ReaderType: type) type {
             var lit_l = [_]u4{0} ** (286);
             var pos: usize = 0;
             while (pos < hlit) {
-                const sym = self.cl_h.find(try self.rdr.peekLiteral(u7));
+                const sym = self.cl_h.find(try self.rdr.peekCode(u7));
                 self.rdr.advance(sym.code_bits);
                 pos += try self.dynamicCodeLength(sym.symbol, &lit_l, pos);
             }
@@ -154,7 +162,7 @@ fn Inflate(comptime ReaderType: type) type {
             var dst_l = [_]u4{0} ** (30);
             pos = 0;
             while (pos < hdist) {
-                const sym = self.cl_h.find(try self.rdr.peekLiteral(u7));
+                const sym = self.cl_h.find(try self.rdr.peekCode(u7));
                 self.rdr.advance(sym.code_bits);
                 pos += try self.dynamicCodeLength(sym.symbol, &dst_l, pos);
             }
@@ -165,7 +173,7 @@ fn Inflate(comptime ReaderType: type) type {
 
         fn dynamicBlock(self: *Self) !bool {
             while (!self.windowFull()) {
-                const sym = self.lit_h.find(try self.rdr.peekLiteral(u15));
+                const sym = self.lit_h.find(try self.rdr.peekCode(u15));
                 self.rdr.advance(sym.code_bits);
 
                 if (sym.kind == .literal) {
@@ -178,10 +186,10 @@ fn Inflate(comptime ReaderType: type) type {
                 }
 
                 // decode backward pointer <length, distance>
-                try self.rdr.ensureBits(33);
+                try self.rdr.ensureBits(33, 2);
                 const length = try self.decodeLength(sym.symbol);
 
-                const dsm = self.dst_h.find(self.rdr.peekLiteralE(u15)); // distance symbol
+                const dsm = self.dst_h.find(self.rdr.peekBufferedCode(u15)); // distance symbol
                 self.rdr.advance(dsm.code_bits);
 
                 const distance = try self.decodeDistance(dsm.symbol);

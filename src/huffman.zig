@@ -10,7 +10,7 @@ pub const Symbol = packed struct {
 
     symbol: u8, // symbol from alphabet
     code_bits: u4, // code bits count
-    kind: Kind, // symbol type, literal, end of block, backreference
+    kind: Kind,
 
     // Sorting less than function.
     pub fn asc(_: void, a: Symbol, b: Symbol) bool {
@@ -38,7 +38,7 @@ pub fn Huffman(comptime alphabet_size: u16) type {
     return struct {
         // all symbols in alaphabet, sorted by code_len, symbol
         symbols: [alphabet_size]Symbol = undefined,
-        // lookup table code -> symbol index
+        // lookup table code -> symbol
         lookup: [1 << max_code_bits]Symbol = undefined,
         // small lookup table
         lookup_s: [1 << small_lookup_bits]Symbol = undefined,
