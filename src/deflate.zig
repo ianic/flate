@@ -4,93 +4,54 @@ const testing = std.testing;
 const expect = testing.expect;
 const print = std.debug.print;
 
-const min_match_length = 4;
-const max_match_length = 258;
-
-const min_match_distance = 1;
-const max_match_distance = 32768;
-
-const log_window_size = 15;
-const window_size = 1 << log_window_size;
-const window_mask = window_size - 1;
-
-const Token = packed struct {
-    const Kind = enum(u2) {
-        literal,
-        end_of_block,
-        backreference,
+const limits = struct {
+    const block = struct {
+        const tokens = 1 << 14;
     };
-
-    dc: u16 = 0, // distance code: 1 - 32768
-    lc_sym: u8 = 0, // length code: 3 - 258, or symbol
-    kind: Kind = .literal,
-
-    pub fn symbol(t: Token) u8 {
-        return t.lc_sym;
-    }
-
-    pub fn distance(t: Token) usize {
-        return if (t.kind == .backreference) t.dc + min_match_distance else 0;
-    }
-
-    pub fn length(t: Token) usize {
-        return if (t.kind == .backreference) t.lc_sym + min_match_length else 1;
-    }
-
-    pub fn literal(sym: u8) Token {
-        return .{ .kind = .literal, .lc_sym = sym };
-    }
-
-    pub fn backreference(dis: usize, len: usize) Token {
-        assert(len > min_match_length and len < max_match_length);
-        assert(dis > min_match_length and dis < max_match_distance);
-        return .{
-            .kind = .backreference,
-            .dc = @intCast(dis - min_match_distance),
-            .lc_sym = @intCast(len - min_match_length),
-        };
-    }
-
-    pub fn endOfBlock() Token {
-        return .{ .kind = .end_of_block };
-    }
-
-    pub fn eql(t: Token, o: Token) bool {
-        return t.kind == o.kind and
-            t.dc == o.dc and
-            t.lc_sym == o.lc_sym;
-    }
+    const match = struct {
+        const min_length = 4;
+        const max_length = 258;
+        const min_distance = 1;
+        const max_distance = 32768;
+    };
+    const window = struct {
+        const bits = 15;
+        const size = 1 << bits;
+        const mask = size - 1;
+    };
 };
 
-test "Token size" {
-    try expect(@sizeOf(Token) == 4);
-    try expect(@bitSizeOf(Token) == 26);
-}
+fn deflate(src: []const u8, tokens: *Tokens) void {
+    const L = Token.literal;
+    const R = Token.backreference;
 
-fn deflate(src: []const u8, tokens: []Token) usize {
-    var tp: usize = 0;
-    var pos: usize = 0;
     var hasher: Hasher = .{};
-    while (pos < src.len) {
-        var t = Token.literal(src[pos]);
-        var l: usize = 1;
+    var win: StreamWindow = .{};
+    assert(win.write(src) == src.len);
 
-        var prev = hasher.add(src[pos..], @intCast(pos));
+    while (true) {
+        const lh = win.lookahead();
+        if (lh.len == 0) break;
+
+        var token = L(lh[0]);
+        var length: usize = 1;
+
+        const pos = win.pos();
+        var prev = hasher.add(lh, @intCast(pos));
         while (prev != Hasher.not_found) {
-            const ml = matchLength(src, prev, pos);
-            if (ml > min_match_length and ml > l) {
-                t = Token.backreference(pos - prev, ml);
-                l = ml;
+            const l = win.match(prev, pos);
+            if (l > length) {
+                token = R(pos - prev, l);
+                length = l;
             }
-            prev = hasher.prev[prev];
+            prev = hasher.prev(prev);
         }
 
-        tokens[tp] = t;
-        tp += 1;
-
-        pos += l;
+        tokens.add(token);
+        win.advance(length);
+        if (length > 0)
+            hasher.bulkAdd(lh[1..], length - 1, @intCast(pos + 1));
     }
-    return tp;
 }
 
 test "deflate" {
@@ -108,17 +69,12 @@ test "deflate" {
     };
 
     for (cases) |c| {
-        var tokens: [64]Token = undefined;
-        const n = deflate(c.data, &tokens);
+        var tokens: Tokens = .{};
+        deflate(c.data, &tokens);
 
-        try expect(n == c.tokens.len);
+        try expect(tokens.len() == c.tokens.len);
         for (c.tokens, 0..) |t, i| {
-            try expect(t.eql(tokens[i]));
-            // if (t.kind == .literal) {
-            //     std.debug.print("literal: {c}\n", .{t.symbol()});
-            // } else {
-            //     std.debug.print("back reference: {d} {d}\n", .{ t.distance(), t.length() });
-            // }
+            try expect(t.eql(tokens.at(i)));
         }
     }
 }
@@ -136,10 +92,11 @@ fn matchLength(src: []const u8, prev: usize, pos: usize) u16 {
 }
 
 const StreamWindow = struct {
-    const buffer_len = 2 * window_size;
-    const max_rp = buffer_len - (min_match_length + max_match_length);
+    const hist_len = limits.window.size;
+    const buffer_len = 2 * limits.window.size;
+    const max_rp = buffer_len - (limits.match.min_length + limits.match.max_length);
 
-    buffer: [2 * window_size]u8 = undefined,
+    buffer: [buffer_len]u8 = undefined,
     wp: usize = 0, // write position
     rp: usize = 0, // read position
 
@@ -154,10 +111,10 @@ const StreamWindow = struct {
 
     pub fn slide(self: *StreamWindow) usize {
         assert(self.rp >= max_rp and self.wp >= self.rp);
-        const n = self.wp - window_size;
-        @memcpy(self.buffer[0..n], self.buffer[window_size..self.wp]);
-        self.rp -= window_size;
-        self.wp -= window_size;
+        const n = self.wp - hist_len;
+        @memcpy(self.buffer[0..n], self.buffer[hist_len..self.wp]);
+        self.rp -= hist_len;
+        self.wp -= hist_len;
         return n;
     }
 
@@ -175,10 +132,10 @@ const StreamWindow = struct {
         self.rp += n;
     }
 
-    // Finds match length between prev position and pos.
-    pub fn match(self: *StreamWindow, prev: usize, pos: usize) usize {
+    // Finds match length between previous and current position.
+    pub fn match(self: *StreamWindow, prev: usize, curr: usize) usize {
         var p1: usize = prev;
-        var p2: usize = pos;
+        var p2: usize = curr;
         var n: usize = 0;
         while (self.buffer[p1] == self.buffer[p2]) {
             n += 1;
@@ -186,7 +143,11 @@ const StreamWindow = struct {
             p1 += 1;
             p2 += 1;
         }
-        return n;
+        return if (n > limits.match.min_length) n else 0;
+    }
+
+    pub fn pos(self: *StreamWindow) usize {
+        return self.rp;
     }
 };
 
@@ -201,7 +162,7 @@ test "StreamWindow match" {
     try expect(win.match(1, 6) == 18);
     try expect(win.match(1, 11) == 13);
     try expect(win.match(1, 16) == 8);
-    try expect(win.match(1, 21) == 3);
+    try expect(win.match(1, 21) == 0);
 }
 
 test "StreamWindow slide" {
@@ -213,9 +174,9 @@ test "StreamWindow slide" {
 
     const n = win.slide();
     try expect(win.buffer[win.rp] == 0xab);
-    try expect(n == window_size - 11);
-    try expect(win.rp == window_size - 111);
-    try expect(win.wp == window_size - 11);
+    try expect(n == StreamWindow.hist_len - 11);
+    try expect(win.rp == StreamWindow.hist_len - 111);
+    try expect(win.wp == StreamWindow.hist_len - 11);
     try expect(win.lookahead().len == 100);
     try expect(win.history().len == win.rp);
 }
@@ -226,18 +187,36 @@ const Hasher = struct {
     const shift = 32 - bits;
     const mask = (1 << bits) - 1;
     const size = 1 << bits;
-    const not_found = window_mask;
+    const not_found = limits.window.mask;
 
     head: [size]u16 = [_]u16{not_found} ** size,
-    prev: [window_size]u16 = [_]u16{not_found} ** window_size,
+    chain: [limits.window.size]u16 = [_]u16{not_found} ** limits.window.size,
 
     fn add(self: *Hasher, data: []const u8, idx: u16) u16 {
         if (data.len < 4) return not_found;
         const h = hash(data[0..4]);
+        return self.set(h, idx);
+    }
+
+    fn prev(self: *Hasher, idx: u16) u16 {
+        return self.chain[idx];
+    }
+
+    inline fn set(self: *Hasher, h: u32, idx: u16) u16 {
         const p = self.head[h];
         self.head[h] = idx;
-        self.prev[idx] = p;
+        self.chain[idx] = p;
         return p;
+    }
+
+    fn bulkAdd(self: *Hasher, data: []const u8, len: usize, idx: u16) void {
+        var i: u16 = idx;
+        for (0..len) |j| {
+            const d = data[j..];
+            if (d.len < limits.match.min_length) return;
+            _ = self.add(d, i);
+            i += 1;
+        }
     }
 
     fn hash(b: *const [4]u8) u32 {
@@ -248,7 +227,7 @@ const Hasher = struct {
     }
 
     fn bulk(b: []u8, dst: []u32) u32 {
-        if (b.len < min_match_length) {
+        if (b.len < limits.match.min_length) {
             return 0;
         }
         var hb =
@@ -258,7 +237,7 @@ const Hasher = struct {
             @as(u32, b[0]) << 24;
 
         dst[0] = (hb *% mul) >> (32 - bits);
-        const end = b.len - min_match_length + 1;
+        const end = b.len - limits.match.min_length + 1;
         var i: u32 = 1;
         while (i < end) : (i += 1) {
             hb = (hb << 8) | @as(u32, b[i + 3]);
@@ -288,6 +267,86 @@ test "Hasher" {
 
     const v = Hasher.hash(data[2 .. 2 + 4]);
     try testing.expect(h.head[v] == 2 + 16);
-    try testing.expect(h.prev[2 + 16] == 2 + 8);
-    try testing.expect(h.prev[2 + 8] == 2);
+    try testing.expect(h.chain[2 + 16] == 2 + 8);
+    try testing.expect(h.chain[2 + 8] == 2);
 }
+
+const Token = packed struct {
+    const Kind = enum(u2) {
+        literal,
+        end_of_block,
+        backreference,
+    };
+
+    dc: u16 = 0, // distance code: 1 - 32768
+    lc_sym: u8 = 0, // length code: 3 - 258, or symbol
+    kind: Kind = .literal,
+
+    pub fn symbol(t: Token) u8 {
+        return t.lc_sym;
+    }
+
+    pub fn distance(t: Token) usize {
+        return if (t.kind == .backreference) t.dc + limits.match.min_distance else 0;
+    }
+
+    pub fn length(t: Token) usize {
+        return if (t.kind == .backreference) t.lc_sym + limits.match.min_length else 1;
+    }
+
+    pub fn literal(sym: u8) Token {
+        return .{ .kind = .literal, .lc_sym = sym };
+    }
+
+    pub fn backreference(dis: usize, len: usize) Token {
+        assert(len > limits.match.min_length and len < limits.match.max_length);
+        assert(dis > limits.match.min_distance and dis < limits.match.max_distance);
+        return .{
+            .kind = .backreference,
+            .dc = @intCast(dis - limits.match.min_distance),
+            .lc_sym = @intCast(len - limits.match.min_length),
+        };
+    }
+
+    pub fn endOfBlock() Token {
+        return .{ .kind = .end_of_block };
+    }
+
+    pub fn eql(t: Token, o: Token) bool {
+        return t.kind == o.kind and
+            t.dc == o.dc and
+            t.lc_sym == o.lc_sym;
+    }
+
+    pub fn print(t: Token) void {
+        switch (t.kind) {
+            .literal => std.debug.print("L: {c}\n", .{t.symbol()}),
+            .backreference => std.debug.print("R: {d} {d}\n", .{ t.distance(), t.length() }),
+            .end_of_block => std.debug.pring("E\n", .{}),
+        }
+    }
+};
+
+test "Token size" {
+    try expect(@sizeOf(Token) == 4);
+    try expect(@bitSizeOf(Token) == 26);
+}
+
+const Tokens = struct {
+    list: [limits.block.tokens]Token = undefined,
+    pos: usize = 0,
+
+    fn add(self: *Tokens, t: Token) void {
+        self.list[self.pos] = t;
+        self.pos += 1;
+    }
+
+    fn len(self: *Tokens) usize {
+        return self.pos;
+    }
+
+    fn at(self: *Tokens, n: usize) Token {
+        assert(n < self.pos);
+        return self.list[n];
+    }
+};
