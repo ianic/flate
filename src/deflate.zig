@@ -19,6 +19,12 @@ const limits = struct {
         const size = 1 << bits;
         const mask = size - 1;
     };
+    const hash = struct {
+        const bits = 17;
+        const size = 1 << bits;
+        const mask = size - 1;
+        const shift = 32 - bits;
+    };
 };
 
 fn deflate(src: []const u8, tokens: *Tokens) void {
@@ -183,13 +189,13 @@ test "StreamWindow slide" {
 
 const Hasher = struct {
     const mul = 0x1e35a7bd;
-    const bits = 17;
-    const shift = 32 - bits;
-    const mask = (1 << bits) - 1;
-    const size = 1 << bits;
+    // const bits = 17;
+    // const shift = 32 - bits;
+    // const mask = (1 << bits) - 1;
+    // const size = 1 << bits;
     const not_found = limits.window.mask;
 
-    head: [size]u16 = [_]u16{not_found} ** size,
+    head: [limits.hash.size]u16 = [_]u16{not_found} ** limits.hash.size,
     chain: [limits.window.size]u16 = [_]u16{not_found} ** limits.window.size,
 
     fn add(self: *Hasher, data: []const u8, idx: u16) u16 {
@@ -210,6 +216,7 @@ const Hasher = struct {
     }
 
     fn bulkAdd(self: *Hasher, data: []const u8, len: usize, idx: u16) void {
+        // TOOD: use bulk alg from below
         var i: u16 = idx;
         for (0..len) |j| {
             const d = data[j..];
@@ -223,7 +230,7 @@ const Hasher = struct {
         return (((@as(u32, b[3]) |
             @as(u32, b[2]) << 8 |
             @as(u32, b[1]) << 16 |
-            @as(u32, b[0]) << 24) *% mul) >> shift) & mask;
+            @as(u32, b[0]) << 24) *% mul) >> limits.hash.shift) & limits.hash.mask;
     }
 
     fn bulk(b: []u8, dst: []u32) u32 {
@@ -236,12 +243,12 @@ const Hasher = struct {
             @as(u32, b[1]) << 16 |
             @as(u32, b[0]) << 24;
 
-        dst[0] = (hb *% mul) >> (32 - bits);
+        dst[0] = (hb *% mul) >> limits.hash.shift;
         const end = b.len - limits.match.min_length + 1;
         var i: u32 = 1;
         while (i < end) : (i += 1) {
             hb = (hb << 8) | @as(u32, b[i + 3]);
-            dst[i] = (hb *% mul) >> (32 - bits);
+            dst[i] = (hb *% mul) >> limits.hash.shift;
         }
         return hb;
     }
@@ -299,8 +306,8 @@ const Token = packed struct {
     }
 
     pub fn backreference(dis: usize, len: usize) Token {
-        assert(len > limits.match.min_length and len < limits.match.max_length);
-        assert(dis > limits.match.min_distance and dis < limits.match.max_distance);
+        assert(len >= limits.match.min_length and len <= limits.match.max_length);
+        assert(dis >= limits.match.min_distance and dis <= limits.match.max_distance);
         return .{
             .kind = .backreference,
             .dc = @intCast(dis - limits.match.min_distance),
@@ -318,11 +325,11 @@ const Token = packed struct {
             t.lc_sym == o.lc_sym;
     }
 
-    pub fn print(t: Token) void {
+    pub fn string(t: Token) void {
         switch (t.kind) {
-            .literal => std.debug.print("L: {c}\n", .{t.symbol()}),
-            .backreference => std.debug.print("R: {d} {d}\n", .{ t.distance(), t.length() }),
-            .end_of_block => std.debug.pring("E\n", .{}),
+            .literal => std.debug.print("L('{c}'), ", .{t.symbol()}),
+            .backreference => std.debug.print("R({d}, {d}), ", .{ t.distance(), t.length() }),
+            .end_of_block => std.debug.print("E()", .{}),
         }
     }
 };
@@ -348,5 +355,9 @@ const Tokens = struct {
     fn at(self: *Tokens, n: usize) Token {
         assert(n < self.pos);
         return self.list[n];
+    }
+
+    fn tokens(self: *Tokens) []const Token {
+        return self.list[0..self.pos];
     }
 };
