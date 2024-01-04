@@ -27,7 +27,98 @@ const limits = struct {
     };
 };
 
-fn deflate(src: []const u8, tokens: *Tokens) void {
+pub fn deflate(writer: anytype) Deflate(@TypeOf(writer)) {
+    return Deflate(@TypeOf(writer)).init(writer);
+}
+
+pub fn Deflate(comptime WriterType: type) type {
+    return struct {
+        hasher: Hasher = .{},
+        win: StreamWindow = .{},
+        tokens: Tokens = .{},
+
+        const Self = @This();
+        pub fn init(w: WriterType) Self {
+            _ = w;
+            return .{};
+        }
+
+        fn tokenize(self: *Self) bool {
+            const L = Token.literal;
+            const R = Token.backreference;
+
+            while (!self.tokens.full()) {
+                const lh = self.win.lookahead();
+                if (lh.len == 0) return false;
+
+                var token = L(lh[0]);
+                var length: usize = 1;
+
+                const pos = self.win.pos();
+                var prev = self.hasher.add(lh, @intCast(pos));
+                while (prev != Hasher.not_found) {
+                    const d = pos - prev;
+                    if (d > limits.match.max_distance) break;
+                    const l = self.win.match(prev, pos);
+                    if (l > length) {
+                        token = R(d, l);
+                        length = l;
+                    }
+                    prev = self.hasher.prev(prev);
+                }
+
+                self.win.advance(length);
+                if (length > 1)
+                    self.hasher.bulkAdd(lh[1..], length - 1, @intCast(pos + 1));
+
+                self.tokens.add(token);
+                //token.string();
+            }
+            return true;
+        }
+
+        fn step(self: *Self) !void {
+            while (self.tokenize())
+                try self.flush();
+        }
+
+        fn flush(self: *Self) !void {
+            self.tokens.reset();
+        }
+
+        pub fn close(self: *Self) !void {
+            try self.step();
+        }
+
+        pub fn write(self: *Self, input: []const u8) !usize {
+            var buf = input;
+
+            while (buf.len > 0) {
+                try self.step();
+                const n = self.win.write(buf);
+                if (n == 0) {
+                    const j = self.win.slide();
+                    self.hasher.slide(@intCast(j));
+                    continue;
+                }
+                buf = buf[n..];
+            }
+
+            return input.len;
+        }
+
+        // Writer interface
+
+        pub const Writer = std.io.Writer(*Self, Error, write);
+        pub const Error = WriterType.Error;
+
+        pub fn writer(self: *Self) Writer {
+            return .{ .context = self };
+        }
+    };
+}
+
+fn tokenize(src: []const u8, tokens: *Tokens) void {
     const L = Token.literal;
     const R = Token.backreference;
 
@@ -76,7 +167,7 @@ test "deflate" {
 
     for (cases) |c| {
         var tokens: Tokens = .{};
-        deflate(c.data, &tokens);
+        tokenize(c.data, &tokens);
 
         try expect(tokens.len() == c.tokens.len);
         for (c.tokens, 0..) |t, i| {
@@ -99,7 +190,7 @@ fn matchLength(src: []const u8, prev: usize, pos: usize) u16 {
 
 const StreamWindow = struct {
     const hist_len = limits.window.size;
-    const buffer_len = 2 * limits.window.size;
+    const buffer_len = 2 * hist_len;
     const max_rp = buffer_len - (limits.match.min_length + limits.match.max_length);
 
     buffer: [buffer_len]u8 = undefined,
@@ -143,9 +234,8 @@ const StreamWindow = struct {
         var p1: usize = prev;
         var p2: usize = curr;
         var n: usize = 0;
-        while (self.buffer[p1] == self.buffer[p2]) {
+        while (p2 < self.wp and self.buffer[p1] == self.buffer[p2] and n < limits.match.max_length) {
             n += 1;
-            if (p2 == self.wp) break;
             p1 += 1;
             p2 += 1;
         }
@@ -189,14 +279,10 @@ test "StreamWindow slide" {
 
 const Hasher = struct {
     const mul = 0x1e35a7bd;
-    // const bits = 17;
-    // const shift = 32 - bits;
-    // const mask = (1 << bits) - 1;
-    // const size = 1 << bits;
     const not_found = limits.window.mask;
 
     head: [limits.hash.size]u16 = [_]u16{not_found} ** limits.hash.size,
-    chain: [limits.window.size]u16 = [_]u16{not_found} ** limits.window.size,
+    chain: [2 * limits.window.size]u16 = [_]u16{not_found} ** (2 * limits.window.size),
 
     fn add(self: *Hasher, data: []const u8, idx: u16) u16 {
         if (data.len < 4) return not_found;
@@ -213,6 +299,17 @@ const Hasher = struct {
         self.head[h] = idx;
         self.chain[idx] = p;
         return p;
+    }
+
+    pub fn slide(self: *Hasher, n: u16) void {
+        for (self.head, 0..) |v, i| {
+            if (v == not_found) continue;
+            self.head[i] = if (v < n) not_found else v - n;
+        }
+        for (self.chain, 0..) |v, i| {
+            if (v == not_found) continue;
+            self.chain[i] = if (v < n) not_found else v - n;
+        }
     }
 
     fn bulkAdd(self: *Hasher, data: []const u8, len: usize, idx: u16) void {
@@ -294,11 +391,11 @@ const Token = packed struct {
     }
 
     pub fn distance(t: Token) usize {
-        return if (t.kind == .backreference) t.dc + limits.match.min_distance else 0;
+        return if (t.kind == .backreference) @as(usize, t.dc) + limits.match.min_distance else 0;
     }
 
     pub fn length(t: Token) usize {
-        return if (t.kind == .backreference) t.lc_sym + limits.match.min_length else 1;
+        return if (t.kind == .backreference) @as(usize, t.lc_sym) + limits.match.min_length else 1;
     }
 
     pub fn literal(sym: u8) Token {
@@ -327,8 +424,8 @@ const Token = packed struct {
 
     pub fn string(t: Token) void {
         switch (t.kind) {
-            .literal => std.debug.print("L('{c}'), ", .{t.symbol()}),
-            .backreference => std.debug.print("R({d}, {d}), ", .{ t.distance(), t.length() }),
+            .literal => std.debug.print("L('{c}') \n", .{t.symbol()}),
+            .backreference => std.debug.print("R({d}, {d}) \n", .{ t.distance(), t.length() }),
             .end_of_block => std.debug.print("E()", .{}),
         }
     }
@@ -337,6 +434,7 @@ const Token = packed struct {
 test "Token size" {
     try expect(@sizeOf(Token) == 4);
     try expect(@bitSizeOf(Token) == 26);
+    print("size of Hasher {d}\n", .{@sizeOf(Hasher) / 1024});
 }
 
 const Tokens = struct {
@@ -352,6 +450,14 @@ const Tokens = struct {
         return self.pos;
     }
 
+    fn full(self: *Tokens) bool {
+        return self.pos == limits.block.tokens;
+    }
+
+    fn reset(self: *Tokens) void {
+        self.pos = 0;
+    }
+
     fn at(self: *Tokens, n: usize) Token {
         assert(n < self.pos);
         return self.list[n];
@@ -361,3 +467,21 @@ const Tokens = struct {
         return self.list[0..self.pos];
     }
 };
+
+test "zig tar" {
+    const file_name = "testdata/2600.txt.utf-8";
+    var file = try std.fs.cwd().openFile(file_name, .{});
+    defer file.close();
+    var br = std.io.bufferedReader(file.reader());
+    var rdr = br.reader();
+
+    var df = deflate(file.writer());
+
+    var buf: [4096]u8 = undefined;
+    while (true) {
+        const n = try rdr.readAll(&buf);
+        _ = try df.write(buf[0..n]);
+        if (n < buf.len) break;
+    }
+    try df.close();
+}
