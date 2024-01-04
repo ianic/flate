@@ -1,3 +1,6 @@
+name: build
+run-name: ${{ github.actor }} is pushing changes
+on: [push]
 jobs:
   test:
     strategy:
