@@ -36,11 +36,11 @@ pub fn Deflate(comptime WriterType: type) type {
         hasher: Hasher = .{},
         win: StreamWindow = .{},
         tokens: Tokens = .{},
+        token_writer: WriterType,
 
         const Self = @This();
         pub fn init(w: WriterType) Self {
-            _ = w;
-            return .{};
+            return .{ .token_writer = w };
         }
 
         fn tokenize(self: *Self) bool {
@@ -83,11 +83,13 @@ pub fn Deflate(comptime WriterType: type) type {
         }
 
         fn flush(self: *Self) !void {
+            try self.token_writer.write(self.tokens.tokens());
             self.tokens.reset();
         }
 
         pub fn close(self: *Self) !void {
             try self.step();
+            try self.flush();
         }
 
         pub fn write(self: *Self, input: []const u8) !usize {
@@ -390,12 +392,12 @@ const Token = packed struct {
         return t.lc_sym;
     }
 
-    pub fn distance(t: Token) usize {
-        return if (t.kind == .backreference) @as(usize, t.dc) + limits.match.min_distance else 0;
+    pub fn distance(t: Token) u16 {
+        return if (t.kind == .backreference) @as(u16, t.dc) + limits.match.min_distance else 0;
     }
 
-    pub fn length(t: Token) usize {
-        return if (t.kind == .backreference) @as(usize, t.lc_sym) + limits.match.min_length else 1;
+    pub fn length(t: Token) u16 {
+        return if (t.kind == .backreference) @as(u16, t.lc_sym) + limits.match.min_length else 1;
     }
 
     pub fn literal(sym: u8) Token {
@@ -475,7 +477,8 @@ test "zig tar" {
     var br = std.io.bufferedReader(file.reader());
     var rdr = br.reader();
 
-    var df = deflate(file.writer());
+    var stw: StdoutTokenWriter = .{};
+    var df = deflate(&stw);
 
     var buf: [4096]u8 = undefined;
     while (true) {
@@ -485,3 +488,33 @@ test "zig tar" {
     }
     try df.close();
 }
+
+const SlidingWindow = @import("sliding_window.zig").SlidingWindow;
+const StdoutTokenWriter = struct {
+    win: SlidingWindow = .{},
+
+    pub fn write(self: *StdoutTokenWriter, tokens: []const Token) !void {
+        const stdout = std.io.getStdOut();
+
+        for (tokens) |t| {
+            switch (t.kind) {
+                .literal => self.win.write(t.symbol()),
+                .backreference => self.win.writeCopy(t.length(), t.distance()),
+                else => unreachable,
+            }
+            if (self.win.free() < 285) {
+                while (true) {
+                    const buf = self.win.read();
+                    if (buf.len == 0) break;
+                    try stdout.writeAll(buf);
+                }
+            }
+        }
+
+        while (true) {
+            const buf = self.win.read();
+            if (buf.len == 0) break;
+            try stdout.writeAll(buf);
+        }
+    }
+};
