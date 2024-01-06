@@ -9,12 +9,14 @@ const limits = struct {
         const tokens = 1 << 14;
     };
     const match = struct {
-        const min_length = 4;
+        const base_length = 3; // smallest match length per the RFC section 3.2.5
+        const min_length = 4; // min length used in this algorithm
         const max_length = 258;
+
         const min_distance = 1;
         const max_distance = 32768;
     };
-    const window = struct {
+    const window = struct { // TODO: consider renaming this into history
         const bits = 15;
         const size = 1 << bits;
         const mask = size - 1;
@@ -45,7 +47,7 @@ pub fn Deflate(comptime WriterType: type) type {
 
         fn tokenize(self: *Self) bool {
             const L = Token.literal;
-            const R = Token.backreference;
+            const M = Token.match;
 
             while (!self.tokens.full()) {
                 const lh = self.win.lookahead();
@@ -61,7 +63,7 @@ pub fn Deflate(comptime WriterType: type) type {
                     if (d > limits.match.max_distance) break;
                     const l = self.win.match(prev, pos);
                     if (l > length) {
-                        token = R(d, l);
+                        token = M(d, l);
                         length = l;
                     }
                     prev = self.hasher.prev(prev);
@@ -90,6 +92,7 @@ pub fn Deflate(comptime WriterType: type) type {
         pub fn close(self: *Self) !void {
             try self.step();
             try self.flush();
+            try self.token_writer.close();
         }
 
         pub fn write(self: *Self, input: []const u8) !usize {
@@ -109,6 +112,16 @@ pub fn Deflate(comptime WriterType: type) type {
             return input.len;
         }
 
+        pub fn compress(self: *Self, rdr: anytype) !void {
+            var buf: [4096]u8 = undefined;
+            while (true) {
+                const n = try rdr.readAll(&buf);
+                _ = try self.write(buf[0..n]);
+                if (n < buf.len) break;
+            }
+            try self.close();
+        }
+
         // Writer interface
 
         pub const Writer = std.io.Writer(*Self, Error, write);
@@ -122,7 +135,7 @@ pub fn Deflate(comptime WriterType: type) type {
 
 fn tokenize(src: []const u8, tokens: *Tokens) void {
     const L = Token.literal;
-    const R = Token.backreference;
+    const M = Token.match;
 
     var hasher: Hasher = .{};
     var win: StreamWindow = .{};
@@ -140,7 +153,7 @@ fn tokenize(src: []const u8, tokens: *Tokens) void {
         while (prev != Hasher.not_found) {
             const l = win.match(prev, pos);
             if (l > length) {
-                token = R(pos - prev, l);
+                token = M(pos - prev, l);
                 length = l;
             }
             prev = hasher.prev(prev);
@@ -155,7 +168,7 @@ fn tokenize(src: []const u8, tokens: *Tokens) void {
 
 test "deflate" {
     const L = Token.literal;
-    const R = Token.backreference;
+    const M = Token.match;
 
     const cases = [_]struct {
         data: []const u8,
@@ -163,7 +176,7 @@ test "deflate" {
     }{
         .{
             .data = "Blah blah blah blah blah!",
-            .tokens = &[_]Token{ L('B'), L('l'), L('a'), L('h'), L(' '), L('b'), R(5, 18), L('!') },
+            .tokens = &[_]Token{ L('B'), L('l'), L('a'), L('h'), L(' '), L('b'), M(5, 18), L('!') },
         },
     };
 
@@ -380,12 +393,12 @@ test "Hasher" {
 const Token = packed struct {
     const Kind = enum(u2) {
         literal,
+        match,
         end_of_block,
-        backreference,
     };
 
-    dc: u16 = 0, // distance code: 1 - 32768
-    lc_sym: u8 = 0, // length code: 3 - 258, or symbol
+    dc: u16 = 0, // distance code: (1 - 32768) - 1
+    lc_sym: u8 = 0, // length code: (3 - 258) - 3, or symbol
     kind: Kind = .literal,
 
     pub fn symbol(t: Token) u8 {
@@ -393,24 +406,24 @@ const Token = packed struct {
     }
 
     pub fn distance(t: Token) u16 {
-        return if (t.kind == .backreference) @as(u16, t.dc) + limits.match.min_distance else 0;
+        return if (t.kind == .match) @as(u16, t.dc) + limits.match.min_distance else 0;
     }
 
     pub fn length(t: Token) u16 {
-        return if (t.kind == .backreference) @as(u16, t.lc_sym) + limits.match.min_length else 1;
+        return if (t.kind == .match) @as(u16, t.lc_sym) + limits.match.base_length else 1;
     }
 
     pub fn literal(sym: u8) Token {
         return .{ .kind = .literal, .lc_sym = sym };
     }
 
-    pub fn backreference(dis: usize, len: usize) Token {
+    pub fn match(dis: usize, len: usize) Token {
         assert(len >= limits.match.min_length and len <= limits.match.max_length);
         assert(dis >= limits.match.min_distance and dis <= limits.match.max_distance);
         return .{
-            .kind = .backreference,
+            .kind = .match,
             .dc = @intCast(dis - limits.match.min_distance),
-            .lc_sym = @intCast(len - limits.match.min_length),
+            .lc_sym = @intCast(len - limits.match.base_length),
         };
     }
 
@@ -427,7 +440,7 @@ const Token = packed struct {
     pub fn string(t: Token) void {
         switch (t.kind) {
             .literal => std.debug.print("L('{c}') \n", .{t.symbol()}),
-            .backreference => std.debug.print("R({d}, {d}) \n", .{ t.distance(), t.length() }),
+            .match => std.debug.print("R({d}, {d}) \n", .{ t.distance(), t.length() }),
             .end_of_block => std.debug.print("E()", .{}),
         }
     }
@@ -468,6 +481,16 @@ const Tokens = struct {
     fn tokens(self: *Tokens) []const Token {
         return self.list[0..self.pos];
     }
+
+    fn toStd(self: *Tokens, s: []std_token.Token) void {
+        for (self.tokens(), 0..) |t, i| {
+            s[i] = switch (t.kind) {
+                .literal => std_token.literalToken(t.symbol()),
+                .match => std_token.matchToken(t.length(), t.distance()),
+                else => unreachable,
+            };
+        }
+    }
 };
 
 test "zig tar" {
@@ -490,6 +513,7 @@ test "zig tar" {
 }
 
 const SlidingWindow = @import("sliding_window.zig").SlidingWindow;
+
 const StdoutTokenWriter = struct {
     win: SlidingWindow = .{},
 
@@ -499,7 +523,7 @@ const StdoutTokenWriter = struct {
         for (tokens) |t| {
             switch (t.kind) {
                 .literal => self.win.write(t.symbol()),
-                .backreference => self.win.writeCopy(t.length(), t.distance()),
+                .match => self.win.writeCopy(t.length(), t.distance()),
                 else => unreachable,
             }
             if (self.win.free() < 285) {
@@ -517,4 +541,125 @@ const StdoutTokenWriter = struct {
             try stdout.writeAll(buf);
         }
     }
+
+    pub fn close(self: *StdoutTokenWriter) !void {
+        _ = self;
+    }
 };
+
+const std_token = @import("std/token.zig");
+const hm_bw = @import("std/huffman_bit_writer.zig");
+
+test "compress file" {
+    const input_file_name = "testdata/2600.txt.utf-8";
+    //const input_file_name = "testdata/h";
+    var input = try std.fs.cwd().openFile(input_file_name, .{});
+    defer input.close();
+
+    const output_file_name = "testdata/output.gz";
+    var output = try std.fs.cwd().createFile(output_file_name, .{ .truncate = true });
+    //var in_file = try std.fs.cwd().openFile(in_file_name, .{ .mode = .write_only });
+    defer output.close();
+
+    //var gz = try gzipHeaderFooterWriter(output.writer());
+
+    var tw = try tokenWriter(output.writer());
+    var df = deflate(&tw);
+
+    const gzipHeader = [_]u8{ 0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+    try output.writeAll(&gzipHeader);
+
+    var cr = chksumReader(input.reader());
+    try df.compress(cr.reader());
+    // var buf: [4096]u8 = undefined;
+    // while (true) {
+    //     const n = try rdr.readAll(&buf);
+    //     _ = try df.write(buf[0..n]);
+    //     crc.update(buf[0..n]);
+    //     len += n;
+    //     if (n < buf.len) break;
+    // }
+    // try df.close();
+
+    var bits: [4]u8 = undefined;
+    std.mem.writeInt(u32, &bits, cr.chksum(), .little);
+    try output.writeAll(&bits);
+
+    std.mem.writeInt(u32, &bits, cr.bytesRead(), .little);
+    try output.writeAll(&bits);
+}
+
+pub fn tokenWriter(writer: anytype) !TokenWriter(@TypeOf(writer)) {
+    return try TokenWriter(@TypeOf(writer)).init(writer);
+}
+
+fn TokenWriter(comptime WriterType: type) type {
+    return struct {
+        hw_bw: hm_bw.HuffmanBitWriter(WriterType),
+        tokens: [limits.block.tokens]std_token.Token = undefined,
+
+        const Self = @This();
+
+        pub fn init(writer: WriterType) !Self {
+            const allocator = std.heap.page_allocator;
+            return .{ .hw_bw = try hm_bw.huffmanBitWriter(allocator, writer) };
+        }
+
+        pub fn write(self: *Self, tokens: []const Token) !void {
+            for (tokens, 0..) |t, i| {
+                self.tokens[i] = switch (t.kind) {
+                    .literal => std_token.literalToken(t.symbol()),
+                    .match => std_token.matchToken(t.lc_sym, t.dc),
+                    else => unreachable,
+                };
+            }
+            const std_tokens = self.tokens[0..tokens.len];
+            try self.hw_bw.writeBlock(std_tokens, false, null);
+        }
+
+        pub fn close(self: *Self) !void {
+            try self.hw_bw.writeStoredHeader(0, true);
+            try self.hw_bw.flush();
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.hw_bw.deinit();
+        }
+    };
+}
+
+pub fn ChksumReader(comptime ReaderType: type) type {
+    return struct {
+        rdr: ReaderType,
+        bytes: usize = 0,
+        hasher: std.hash.Crc32 = std.hash.Crc32.init(),
+
+        const Self = @This();
+
+        pub const Error = ReaderType.Error;
+        pub const Reader = std.io.Reader(*Self, Error, read);
+
+        pub fn reader(self: *Self) Reader {
+            return .{ .context = self };
+        }
+
+        pub fn read(self: *Self, buf: []u8) Error!usize {
+            const n = try self.rdr.read(buf);
+            self.hasher.update(buf[0..n]);
+            self.bytes += n;
+            return n;
+        }
+
+        pub fn chksum(self: *Self) u32 {
+            return self.hasher.final();
+        }
+
+        pub fn bytesRead(self: *Self) u32 {
+            return @intCast(self.bytes);
+        }
+    };
+}
+
+pub fn chksumReader(reader: anytype) ChksumReader(@TypeOf(reader)) {
+    return .{ .rdr = reader };
+}
