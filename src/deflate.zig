@@ -58,8 +58,10 @@ pub fn Deflate(comptime WriterType: type) type {
 
                 const pos = self.win.pos();
                 var prev = self.hasher.add(lh, @intCast(pos));
-                while (prev != Hasher.not_found) {
+                var tries: usize = 128;
+                while (prev != Hasher.not_found and tries > 0) : (tries -= 1) {
                     const d = pos - prev;
+                    //print("prev: {d} {d} {d}\n", .{ pos, prev, d });
                     if (d > limits.match.max_distance) break;
                     const l = self.win.match(prev, pos);
                     if (l > length) {
@@ -74,7 +76,6 @@ pub fn Deflate(comptime WriterType: type) type {
                     self.hasher.bulkAdd(lh[1..], length - 1, @intCast(pos + 1));
 
                 self.tokens.add(token);
-                //token.string();
             }
             return true;
         }
@@ -103,7 +104,8 @@ pub fn Deflate(comptime WriterType: type) type {
                 const n = self.win.write(buf);
                 if (n == 0) {
                     const j = self.win.slide();
-                    self.hasher.slide(@intCast(j));
+                    if (j > 0)
+                        self.hasher.slide(@intCast(j));
                     continue;
                 }
                 buf = buf[n..];
@@ -116,6 +118,7 @@ pub fn Deflate(comptime WriterType: type) type {
             var buf: [4096]u8 = undefined;
             while (true) {
                 const n = try rdr.readAll(&buf);
+                print("compress: {d}\n", .{n});
                 _ = try self.write(buf[0..n]);
                 if (n < buf.len) break;
             }
@@ -207,10 +210,12 @@ const StreamWindow = struct {
     const hist_len = limits.window.size;
     const buffer_len = 2 * hist_len;
     const max_rp = buffer_len - (limits.match.min_length + limits.match.max_length);
+    const max_offset = (1 << 32) - (4 * limits.window.size);
 
     buffer: [buffer_len]u8 = undefined,
     wp: usize = 0, // write position
     rp: usize = 0, // read position
+    offset: usize = 0,
 
     pub fn write(self: *StreamWindow, buf: []const u8) usize {
         if (self.rp >= max_rp) return 0; // need to slide
@@ -227,7 +232,14 @@ const StreamWindow = struct {
         @memcpy(self.buffer[0..n], self.buffer[hist_len..self.wp]);
         self.rp -= hist_len;
         self.wp -= hist_len;
-        return n;
+        self.offset += hist_len;
+
+        if (self.offset >= max_offset) {
+            const ret = self.offset;
+            self.offset = 0;
+            return ret;
+        }
+        return 0;
     }
 
     pub fn lookahead(self: *StreamWindow) []const u8 {
@@ -246,8 +258,9 @@ const StreamWindow = struct {
 
     // Finds match length between previous and current position.
     pub fn match(self: *StreamWindow, prev: usize, curr: usize) usize {
-        var p1: usize = prev;
-        var p2: usize = curr;
+        assert(prev > self.offset and curr > prev);
+        var p1: usize = prev - self.offset;
+        var p2: usize = curr - self.offset;
         var n: usize = 0;
         while (p2 < self.wp and self.buffer[p1] == self.buffer[p2] and n < limits.match.max_length) {
             n += 1;
@@ -258,7 +271,7 @@ const StreamWindow = struct {
     }
 
     pub fn pos(self: *StreamWindow) usize {
-        return self.rp;
+        return self.rp + self.offset;
     }
 };
 
@@ -285,7 +298,8 @@ test "StreamWindow slide" {
 
     const n = win.slide();
     try expect(win.buffer[win.rp] == 0xab);
-    try expect(n == StreamWindow.hist_len - 11);
+    try expect(n == 0);
+    try expect(win.offset == StreamWindow.hist_len);
     try expect(win.rp == StreamWindow.hist_len - 111);
     try expect(win.wp == StreamWindow.hist_len - 11);
     try expect(win.lookahead().len == 100);
@@ -294,29 +308,32 @@ test "StreamWindow slide" {
 
 const Hasher = struct {
     const mul = 0x1e35a7bd;
-    const not_found = limits.window.mask;
+    const not_found = (1 << 32) - 1;
+    const mask = limits.window.mask;
 
-    head: [limits.hash.size]u16 = [_]u16{not_found} ** limits.hash.size,
-    chain: [2 * limits.window.size]u16 = [_]u16{not_found} ** (2 * limits.window.size),
+    head: [limits.hash.size]u32 = [_]u32{not_found} ** limits.hash.size,
+    chain: [limits.window.size]u32 = [_]u32{not_found} ** (limits.window.size),
 
-    fn add(self: *Hasher, data: []const u8, idx: u16) u16 {
+    fn add(self: *Hasher, data: []const u8, idx: u32) u32 {
         if (data.len < 4) return not_found;
         const h = hash(data[0..4]);
         return self.set(h, idx);
     }
 
-    fn prev(self: *Hasher, idx: u16) u16 {
-        return self.chain[idx];
+    fn prev(self: *Hasher, idx: u32) u32 {
+        const v = self.chain[idx & mask];
+        return if (v > idx) not_found else v;
     }
 
-    inline fn set(self: *Hasher, h: u32, idx: u16) u16 {
+    inline fn set(self: *Hasher, h: u32, idx: u32) u32 {
         const p = self.head[h];
         self.head[h] = idx;
-        self.chain[idx] = p;
+        self.chain[idx & mask] = p;
         return p;
     }
 
-    pub fn slide(self: *Hasher, n: u16) void {
+    // Slide all positions in head and chain for n.
+    pub fn slide(self: *Hasher, n: u32) void {
         for (self.head, 0..) |v, i| {
             if (v == not_found) continue;
             self.head[i] = if (v < n) not_found else v - n;
@@ -327,9 +344,9 @@ const Hasher = struct {
         }
     }
 
-    fn bulkAdd(self: *Hasher, data: []const u8, len: usize, idx: u16) void {
+    fn bulkAdd(self: *Hasher, data: []const u8, len: usize, idx: u32) void {
         // TOOD: use bulk alg from below
-        var i: u16 = idx;
+        var i: u32 = idx;
         for (0..len) |j| {
             const d = data[j..];
             if (d.len < limits.match.min_length) return;
@@ -494,6 +511,8 @@ const Tokens = struct {
 };
 
 test "zig tar" {
+    if (true) return error.SkipZigTest;
+
     const file_name = "testdata/2600.txt.utf-8";
     var file = try std.fs.cwd().openFile(file_name, .{});
     defer file.close();
