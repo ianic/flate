@@ -29,8 +29,14 @@ const limits = struct {
     };
 };
 
-pub fn deflate(writer: anytype) Deflate(@TypeOf(writer)) {
+pub fn deflateWriter(writer: anytype) Deflate(@TypeOf(writer)) {
     return Deflate(@TypeOf(writer)).init(writer);
+}
+
+pub fn deflate(reader: anytype, writer: anytype) !void {
+    const tw = try tokenWriter(writer);
+    var df = Deflate(@TypeOf(tw)).init(tw);
+    try df.compress(reader);
 }
 
 pub fn Deflate(comptime WriterType: type) type {
@@ -103,9 +109,7 @@ pub fn Deflate(comptime WriterType: type) type {
                 try self.step();
                 const n = self.win.write(buf);
                 if (n == 0) {
-                    const j = self.win.slide();
-                    if (j > 0)
-                        self.hasher.slide(@intCast(j));
+                    self.slide();
                     continue;
                 }
                 buf = buf[n..];
@@ -114,12 +118,26 @@ pub fn Deflate(comptime WriterType: type) type {
             return input.len;
         }
 
+        // slide win and if needed hasher
+        inline fn slide(self: *Self) void {
+            const j = self.win.slide();
+            if (j > 0)
+                self.hasher.slide(@intCast(j));
+        }
+
         pub fn compress(self: *Self, rdr: anytype) !void {
-            var buf: [4096]u8 = undefined;
             while (true) {
-                const n = try rdr.readAll(&buf);
-                print("compress: {d}\n", .{n});
-                _ = try self.write(buf[0..n]);
+                // read from rdr into win
+                const buf = self.win.writable();
+                if (buf.len == 0) {
+                    self.slide();
+                    continue;
+                }
+                const n = try rdr.readAll(buf);
+                self.win.written(n);
+                // process win
+                try self.step();
+                // no more data in reader
                 if (n < buf.len) break;
             }
             try self.close();
@@ -249,6 +267,14 @@ const StreamWindow = struct {
 
     pub fn history(self: *StreamWindow) []const u8 {
         return self.buffer[0..self.rp];
+    }
+
+    pub fn writable(self: *StreamWindow) []u8 {
+        return self.buffer[self.wp..];
+    }
+
+    pub fn written(self: *StreamWindow, n: usize) void {
+        self.wp += n;
     }
 
     pub fn advance(self: *StreamWindow, n: usize) void {
@@ -520,7 +546,7 @@ test "zig tar" {
     var rdr = br.reader();
 
     var stw: StdoutTokenWriter = .{};
-    var df = deflate(&stw);
+    var df = deflateWriter(&stw);
 
     var buf: [4096]u8 = undefined;
     while (true) {
@@ -571,41 +597,29 @@ const hm_bw = @import("std/huffman_bit_writer.zig");
 
 test "compress file" {
     const input_file_name = "testdata/2600.txt.utf-8";
-    //const input_file_name = "testdata/h";
     var input = try std.fs.cwd().openFile(input_file_name, .{});
     defer input.close();
 
     const output_file_name = "testdata/output.gz";
     var output = try std.fs.cwd().createFile(output_file_name, .{ .truncate = true });
-    //var in_file = try std.fs.cwd().openFile(in_file_name, .{ .mode = .write_only });
     defer output.close();
 
-    //var gz = try gzipHeaderFooterWriter(output.writer());
+    try gzip(input.reader(), output.writer());
+}
 
-    var tw = try tokenWriter(output.writer());
-    var df = deflate(&tw);
+pub fn gzip(reader: anytype, writer: anytype) !void {
+    var ev = envelope(reader, .gzip);
+    try ev.header(writer);
+    try deflate(ev.reader(), writer);
+    try ev.footer(writer);
+}
 
-    const gzipHeader = [_]u8{ 0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
-    try output.writeAll(&gzipHeader);
-
-    var cr = chksumReader(input.reader());
-    try df.compress(cr.reader());
-    // var buf: [4096]u8 = undefined;
-    // while (true) {
-    //     const n = try rdr.readAll(&buf);
-    //     _ = try df.write(buf[0..n]);
-    //     crc.update(buf[0..n]);
-    //     len += n;
-    //     if (n < buf.len) break;
-    // }
-    // try df.close();
-
-    var bits: [4]u8 = undefined;
-    std.mem.writeInt(u32, &bits, cr.chksum(), .little);
-    try output.writeAll(&bits);
-
-    std.mem.writeInt(u32, &bits, cr.bytesRead(), .little);
-    try output.writeAll(&bits);
+// TODO: so far just placeholder
+pub fn zlib(reader: anytype, writer: anytype) !void {
+    var ev = envelope(reader, .zlib);
+    try ev.header(writer);
+    try deflate(ev.reader(), writer);
+    try ev.footer(writer);
 }
 
 pub fn tokenWriter(writer: anytype) !TokenWriter(@TypeOf(writer)) {
@@ -647,11 +661,21 @@ fn TokenWriter(comptime WriterType: type) type {
     };
 }
 
-pub fn ChksumReader(comptime ReaderType: type) type {
+const EnvelopeKind = enum {
+    gzip,
+    zlib,
+};
+
+pub fn Envelope(comptime ReaderType: type, comptime kind: EnvelopeKind) type {
+    const HasherType = if (kind == .gzip)
+        std.hash.Crc32
+    else
+        std.hash.Adler32;
+
     return struct {
         rdr: ReaderType,
         bytes: usize = 0,
-        hasher: std.hash.Crc32 = std.hash.Crc32.init(),
+        hasher: HasherType = HasherType.init(),
 
         const Self = @This();
 
@@ -676,9 +700,39 @@ pub fn ChksumReader(comptime ReaderType: type) type {
         pub fn bytesRead(self: *Self) u32 {
             return @intCast(self.bytes);
         }
+
+        pub fn header(self: *Self, wrt: anytype) !void {
+            _ = self;
+            switch (kind) {
+                .gzip => {
+                    const gzipHeader = [_]u8{ 0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+                    try wrt.writeAll(&gzipHeader);
+                },
+                .zlib => {
+                    // TODO: ref https://github.com/golang/go/blob/8db131082d08e497fd8e9383d0ff7715e1bef478/src/compress/zlib/writer.go#L93
+                },
+            }
+        }
+
+        pub fn footer(self: *Self, wrt: anytype) !void {
+            var bits: [4]u8 = undefined;
+            switch (kind) {
+                .gzip => {
+                    std.mem.writeInt(u32, &bits, self.chksum(), .little);
+                    try wrt.writeAll(&bits);
+
+                    std.mem.writeInt(u32, &bits, self.bytesRead(), .little);
+                    try wrt.writeAll(&bits);
+                },
+                .zlib => {
+                    std.mem.writeInt(u32, &bits, self.chksum(), .bit);
+                    try wrt.writeAll(&bits);
+                },
+            }
+        }
     };
 }
 
-pub fn chksumReader(reader: anytype) ChksumReader(@TypeOf(reader)) {
+pub fn envelope(reader: anytype, comptime kind: EnvelopeKind) Envelope(@TypeOf(reader), kind) {
     return .{ .rdr = reader };
 }
