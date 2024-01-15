@@ -37,6 +37,7 @@ pub fn deflate(reader: anytype, writer: anytype) !void {
     const tw = try tokenWriter(writer);
     var df = Deflate(@TypeOf(tw)).init(tw);
     try df.compress(reader);
+    try df.close();
 }
 
 pub fn Deflate(comptime WriterType: type) type {
@@ -51,69 +52,77 @@ pub fn Deflate(comptime WriterType: type) type {
             return .{ .token_writer = w };
         }
 
-        fn tokenize(self: *Self) bool {
-            const L = Token.literal;
-            const M = Token.match;
+        fn nextToken(self: *Self, min_lookahead: usize) ?Token {
+            const lh = self.win.lookahead();
+            if (lh.len <= min_lookahead) return null;
 
-            while (!self.tokens.full()) {
-                const lh = self.win.lookahead();
-                if (lh.len == 0) return false;
+            var token = Token.literal(lh[0]);
+            var length: usize = 1;
 
-                var token = L(lh[0]);
-                var length: usize = 1;
+            const curr_pos = self.win.pos();
+            var match_pos = self.hasher.add(lh, @intCast(curr_pos)); // TODO: rethink intCast
 
-                const pos = self.win.pos();
-                var prev = self.hasher.add(lh, @intCast(pos));
-                var tries: usize = 128;
-                while (prev != Hasher.not_found and tries > 0) : (tries -= 1) {
-                    const d = pos - prev;
-                    //print("prev: {d} {d} {d}\n", .{ pos, prev, d });
-                    if (d > limits.match.max_distance) break;
-                    const l = self.win.match(prev, pos);
-                    if (l > length) {
-                        token = M(d, l);
-                        length = l;
-                    }
-                    prev = self.hasher.prev(prev);
+            var tries: usize = 128; // TODO: this is just hack
+            while (match_pos != Hasher.not_found and tries > 0) : (tries -= 1) {
+                const distance = curr_pos - match_pos;
+                if (distance > limits.match.max_distance or
+                    match_pos < self.win.offset) break;
+                const match_length = self.win.match(match_pos, curr_pos);
+                if (match_length > length) {
+                    token = Token.match(distance, match_length);
+                    length = match_length;
                 }
-
-                self.win.advance(length);
-                if (length > 1)
-                    self.hasher.bulkAdd(lh[1..], length - 1, @intCast(pos + 1));
-
-                self.tokens.add(token);
+                match_pos = self.hasher.prev(match_pos);
             }
-            return true;
+
+            self.win.advance(length);
+            if (length > 1)
+                self.hasher.bulkAdd(lh[1..], length - 1, @intCast(curr_pos + 1));
+
+            return token;
         }
 
-        fn step(self: *Self) !void {
-            while (self.tokenize())
-                try self.flush();
+        const ProcessOption = enum { none, flush, final };
+
+        // Process data in window and create tokens.
+        // If token buffer is full flush tokens to the token writer.
+        fn processWindow(self: *Self, opt: ProcessOption) !void {
+            const min_lookahead: usize = if (opt == .none) limits.match.max_length else 0;
+
+            while (self.nextToken(min_lookahead)) |token| {
+                self.tokens.add(token);
+                if (self.tokens.full()) try self.flushTokens(false);
+            }
+
+            if (opt != .none) try self.flushTokens(opt == .final);
         }
 
-        fn flush(self: *Self) !void {
-            try self.token_writer.write(self.tokens.tokens());
+        fn flushTokens(self: *Self, final: bool) !void {
+            try self.token_writer.write(self.tokens.tokens(), final);
             self.tokens.reset();
         }
 
+        pub fn flush(self: *Self) !void {
+            try self.processWindow(.flush);
+        }
+
         pub fn close(self: *Self) !void {
-            try self.step();
-            try self.flush();
-            try self.token_writer.close();
+            try self.processWindow(.final);
         }
 
         pub fn write(self: *Self, input: []const u8) !usize {
             var buf = input;
 
             while (buf.len > 0) {
-                try self.step();
                 const n = self.win.write(buf);
                 if (n == 0) {
+                    try self.processWindow(.none);
                     self.slide();
                     continue;
                 }
                 buf = buf[n..];
             }
+            try self.processWindow(.none);
 
             return input.len;
         }
@@ -136,11 +145,10 @@ pub fn Deflate(comptime WriterType: type) type {
                 const n = try rdr.readAll(buf);
                 self.win.written(n);
                 // process win
-                try self.step();
+                try self.processWindow(.none);
                 // no more data in reader
                 if (n < buf.len) break;
             }
-            try self.close();
         }
 
         // Writer interface
@@ -154,40 +162,7 @@ pub fn Deflate(comptime WriterType: type) type {
     };
 }
 
-fn tokenize(src: []const u8, tokens: *Tokens) void {
-    const L = Token.literal;
-    const M = Token.match;
-
-    var hasher: Hasher = .{};
-    var win: StreamWindow = .{};
-    assert(win.write(src) == src.len);
-
-    while (true) {
-        const lh = win.lookahead();
-        if (lh.len == 0) break;
-
-        var token = L(lh[0]);
-        var length: usize = 1;
-
-        const pos = win.pos();
-        var prev = hasher.add(lh, @intCast(pos));
-        while (prev != Hasher.not_found) {
-            const l = win.match(prev, pos);
-            if (l > length) {
-                token = M(pos - prev, l);
-                length = l;
-            }
-            prev = hasher.prev(prev);
-        }
-
-        tokens.add(token);
-        win.advance(length);
-        if (length > 0)
-            hasher.bulkAdd(lh[1..], length - 1, @intCast(pos + 1));
-    }
-}
-
-test "deflate" {
+test "deflate: tokenization" {
     const L = Token.literal;
     const M = Token.match;
 
@@ -202,15 +177,30 @@ test "deflate" {
     };
 
     for (cases) |c| {
-        var tokens: Tokens = .{};
-        tokenize(c.data, &tokens);
-
-        try expect(tokens.len() == c.tokens.len);
-        for (c.tokens, 0..) |t, i| {
-            try expect(t.eql(tokens.at(i)));
-        }
+        var fbs = std.io.fixedBufferStream(c.data);
+        var nw: TestTokenWriter = .{
+            .expected = c.tokens,
+        };
+        var df = deflateWriter(&nw);
+        try df.compress(fbs.reader());
+        try df.close();
+        try expect(nw.pos == c.tokens.len);
     }
 }
+
+// Tests that tokens writen are equal to expected token list.
+const TestTokenWriter = struct {
+    const Self = @This();
+    expected: []const Token,
+    pos: usize = 0,
+
+    pub fn write(self: *Self, tokens: []const Token, _: bool) !void {
+        for (tokens) |t| {
+            try expect(t.eql(self.expected[self.pos]));
+            self.pos += 1;
+        }
+    }
+};
 
 fn matchLength(src: []const u8, prev: usize, pos: usize) u16 {
     assert(prev < pos);
@@ -228,7 +218,7 @@ const StreamWindow = struct {
     const hist_len = limits.window.size;
     const buffer_len = 2 * hist_len;
     const max_rp = buffer_len - (limits.match.min_length + limits.match.max_length);
-    const max_offset = (1 << 32) - (4 * limits.window.size);
+    const max_offset = (1 << 32) - (2 * buffer_len);
 
     buffer: [buffer_len]u8 = undefined,
     wp: usize = 0, // write position
@@ -284,7 +274,11 @@ const StreamWindow = struct {
 
     // Finds match length between previous and current position.
     pub fn match(self: *StreamWindow, prev: usize, curr: usize) usize {
-        assert(prev > self.offset and curr > prev);
+        //if (!(prev > self.offset and curr > prev)) {
+        //if (self.offset > 0)
+        //            print("match prev: {d}, self.offset: {d}, curr: {d}\n", .{ prev, self.offset, curr });
+        //}
+        assert(prev >= self.offset and curr > prev);
         var p1: usize = prev - self.offset;
         var p2: usize = curr - self.offset;
         var n: usize = 0;
@@ -409,7 +403,7 @@ const Hasher = struct {
     }
 };
 
-test "Hasher" {
+test "Hasher add/prev" {
     const data = [_]u8{
         0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
         0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
@@ -492,7 +486,8 @@ const Token = packed struct {
 test "Token size" {
     try expect(@sizeOf(Token) == 4);
     try expect(@bitSizeOf(Token) == 26);
-    print("size of Hasher {d}\n", .{@sizeOf(Hasher) / 1024});
+    // print("size of Hasher {d}\n", .{@sizeOf(Hasher)});
+    try expect(@sizeOf(Hasher) == 655_360);
 }
 
 const Tokens = struct {
@@ -536,7 +531,7 @@ const Tokens = struct {
     }
 };
 
-test "zig tar" {
+test "deflate compress file to stdout" {
     if (true) return error.SkipZigTest;
 
     const file_name = "testdata/2600.txt.utf-8";
@@ -595,7 +590,7 @@ const StdoutTokenWriter = struct {
 const std_token = @import("std/token.zig");
 const hm_bw = @import("std/huffman_bit_writer.zig");
 
-test "compress file" {
+test "deflate compress file" {
     const input_file_name = "testdata/2600.txt.utf-8";
     var input = try std.fs.cwd().openFile(input_file_name, .{});
     defer input.close();
@@ -638,7 +633,7 @@ fn TokenWriter(comptime WriterType: type) type {
             return .{ .hw_bw = try hm_bw.huffmanBitWriter(allocator, writer) };
         }
 
-        pub fn write(self: *Self, tokens: []const Token) !void {
+        pub fn write(self: *Self, tokens: []const Token, final: bool) !void {
             for (tokens, 0..) |t, i| {
                 self.tokens[i] = switch (t.kind) {
                     .literal => std_token.literalToken(t.symbol()),
@@ -647,12 +642,8 @@ fn TokenWriter(comptime WriterType: type) type {
                 };
             }
             const std_tokens = self.tokens[0..tokens.len];
-            try self.hw_bw.writeBlock(std_tokens, false, null);
-        }
-
-        pub fn close(self: *Self) !void {
-            try self.hw_bw.writeStoredHeader(0, true);
-            try self.hw_bw.flush();
+            try self.hw_bw.writeBlock(std_tokens, final, null);
+            if (final) try self.hw_bw.flush();
         }
 
         pub fn deinit(self: *Self) void {
