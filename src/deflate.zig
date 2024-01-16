@@ -3,6 +3,7 @@ const assert = std.debug.assert;
 const testing = std.testing;
 const expect = testing.expect;
 const print = std.debug.print;
+const Token = @import("std/token.zig").Token;
 
 const limits = struct {
     const block = struct {
@@ -56,7 +57,7 @@ pub fn Deflate(comptime WriterType: type) type {
             const lh = self.win.lookahead();
             if (lh.len <= min_lookahead) return null;
 
-            var token = Token.literal(lh[0]);
+            var token = Token.initLiteral(lh[0]);
             var length: usize = 1;
 
             const curr_pos = self.win.pos();
@@ -69,7 +70,7 @@ pub fn Deflate(comptime WriterType: type) type {
                     match_pos < self.win.offset) break;
                 const match_length = self.win.match(match_pos, curr_pos);
                 if (match_length > length) {
-                    token = Token.match(distance, match_length);
+                    token = Token.initMatch(distance, match_length);
                     length = match_length;
                 }
                 match_pos = self.hasher.prev(match_pos);
@@ -163,8 +164,8 @@ pub fn Deflate(comptime WriterType: type) type {
 }
 
 test "deflate: tokenization" {
-    const L = Token.literal;
-    const M = Token.match;
+    const L = Token.initLiteral;
+    const M = Token.initMatch;
 
     const cases = [_]struct {
         data: []const u8,
@@ -427,65 +428,16 @@ test "Hasher add/prev" {
     try testing.expect(h.chain[2 + 8] == 2);
 }
 
-const Token = packed struct {
-    const Kind = enum(u2) {
-        literal,
-        match,
-        end_of_block,
-    };
-
-    dc: u16 = 0, // distance code: (1 - 32768) - 1
-    lc_sym: u8 = 0, // length code: (3 - 258) - 3, or symbol
-    kind: Kind = .literal,
-
-    pub fn symbol(t: Token) u8 {
-        return t.lc_sym;
-    }
-
-    pub fn distance(t: Token) u16 {
-        return if (t.kind == .match) @as(u16, t.dc) + limits.match.min_distance else 0;
-    }
-
-    pub fn length(t: Token) u16 {
-        return if (t.kind == .match) @as(u16, t.lc_sym) + limits.match.base_length else 1;
-    }
-
-    pub fn literal(sym: u8) Token {
-        return .{ .kind = .literal, .lc_sym = sym };
-    }
-
-    pub fn match(dis: usize, len: usize) Token {
-        assert(len >= limits.match.min_length and len <= limits.match.max_length);
-        assert(dis >= limits.match.min_distance and dis <= limits.match.max_distance);
-        return .{
-            .kind = .match,
-            .dc = @intCast(dis - limits.match.min_distance),
-            .lc_sym = @intCast(len - limits.match.base_length),
-        };
-    }
-
-    pub fn endOfBlock() Token {
-        return .{ .kind = .end_of_block };
-    }
-
-    pub fn eql(t: Token, o: Token) bool {
-        return t.kind == o.kind and
-            t.dc == o.dc and
-            t.lc_sym == o.lc_sym;
-    }
-
-    pub fn string(t: Token) void {
-        switch (t.kind) {
-            .literal => std.debug.print("L('{c}') \n", .{t.symbol()}),
-            .match => std.debug.print("R({d}, {d}) \n", .{ t.distance(), t.length() }),
-            .end_of_block => std.debug.print("E()", .{}),
-        }
-    }
-};
-
 test "Token size" {
+    // TODO: remove this
+    // print("size of Tokens {d}, bit_offset: {d} {d} {d}\n", .{
+    //     @sizeOf(Tokens),
+    //     @bitOffsetOf(Token, "kind"),
+    //     @bitOffsetOf(Token, "lc_sym"),
+    //     @bitOffsetOf(Token, "dc"),
+    // });
     try expect(@sizeOf(Token) == 4);
-    try expect(@bitSizeOf(Token) == 26);
+    //try expect(@bitSizeOf(Token) == 26);
     // print("size of Hasher {d}\n", .{@sizeOf(Hasher)});
     try expect(@sizeOf(Hasher) == 655_360);
 }
@@ -633,15 +585,15 @@ fn TokenWriter(comptime WriterType: type) type {
         }
 
         pub fn write(self: *Self, tokens: []const Token, final: bool) !void {
-            for (tokens, 0..) |t, i| {
-                self.tokens[i] = switch (t.kind) {
-                    .literal => std_token.literalToken(t.symbol()),
-                    .match => std_token.matchToken(t.lc_sym, t.dc),
-                    else => unreachable,
-                };
-            }
-            const std_tokens = self.tokens[0..tokens.len];
-            try self.hw_bw.writeBlock(std_tokens, final, null);
+            // for (tokens, 0..) |t, i| {
+            //     self.tokens[i] = switch (t.kind) {
+            //         .literal => std_token.literalToken(t.symbol()),
+            //         .match => std_token.matchToken(t.lc_sym, t.dc),
+            //         else => unreachable,
+            //     };
+            // }
+            // const std_tokens = self.tokens[0..tokens.len];
+            try self.hw_bw.writeBlock(tokens, final, null);
             if (final) try self.hw_bw.flush();
         }
     };
