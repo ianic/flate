@@ -34,7 +34,7 @@ pub fn deflateWriter(writer: anytype) Deflate(@TypeOf(writer)) {
 }
 
 pub fn deflate(reader: anytype, writer: anytype) !void {
-    const tw = try tokenWriter(writer);
+    const tw = tokenWriter(writer);
     var df = Deflate(@TypeOf(tw)).init(tw);
     try df.compress(reader);
     try df.close();
@@ -617,8 +617,8 @@ pub fn zlib(reader: anytype, writer: anytype) !void {
     try ev.footer(writer);
 }
 
-pub fn tokenWriter(writer: anytype) !TokenWriter(@TypeOf(writer)) {
-    return try TokenWriter(@TypeOf(writer)).init(writer);
+pub fn tokenWriter(writer: anytype) TokenWriter(@TypeOf(writer)) {
+    return TokenWriter(@TypeOf(writer)).init(writer);
 }
 
 fn TokenWriter(comptime WriterType: type) type {
@@ -628,8 +628,8 @@ fn TokenWriter(comptime WriterType: type) type {
 
         const Self = @This();
 
-        pub fn init(writer: WriterType) !Self {
-            return .{ .hw_bw = try hm_bw.huffmanBitWriter(writer) };
+        pub fn init(writer: WriterType) Self {
+            return .{ .hw_bw = hm_bw.huffmanBitWriter(writer) };
         }
 
         pub fn write(self: *Self, tokens: []const Token, final: bool) !void {

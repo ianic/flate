@@ -780,7 +780,7 @@ const StoredSize = struct {
     storable: bool,
 };
 
-pub fn huffmanBitWriter(writer: anytype) !HuffmanBitWriter(@TypeOf(writer)) {
+pub fn huffmanBitWriter(writer: anytype) HuffmanBitWriter(@TypeOf(writer)) {
     var offset_freq = [1]u16{0} ** deflate_const.offset_code_count;
     offset_freq[0] = 1;
     // huff_offset is a static offset encoder used for huffman only encoding.
@@ -875,7 +875,7 @@ fn testBlockHuff(comptime in_name: []const u8, comptime want_name: []const u8) !
 
     var buf = ArrayList(u8).init(testing.allocator);
     defer buf.deinit();
-    var bw = try huffmanBitWriter(buf.writer());
+    var bw = huffmanBitWriter(buf.writer());
     try bw.writeBlockHuff(false, in);
     try bw.flush();
 
@@ -1589,7 +1589,7 @@ fn testBlock(comptime ht: HuffTest, comptime ttype: TestType) !void {
         const want = @embedFile("testdata/" ++ want_name);
 
         var buf = ArrayList(u8).init(testing.allocator);
-        var bw = try huffmanBitWriter(buf.writer());
+        var bw = huffmanBitWriter(buf.writer());
         try writeToType(ttype, &bw, ht.tokens, input);
 
         var got = buf.items;
@@ -1613,7 +1613,7 @@ fn testBlock(comptime ht: HuffTest, comptime ttype: TestType) !void {
     const want_ni = @embedFile("testdata/" ++ want_name_no_input);
 
     var buf = ArrayList(u8).init(testing.allocator);
-    var bw = try huffmanBitWriter(buf.writer());
+    var bw = huffmanBitWriter(buf.writer());
 
     try writeToType(ttype, &bw, ht.tokens, null);
 
@@ -1649,7 +1649,7 @@ fn writeToType(ttype: TestType, bw: anytype, tok: []const token.Token, input: ?[
 fn testWriterEOF(ttype: TestType, ht_tokens: []const token.Token, input: []const u8) !void {
     var buf = ArrayList(u8).init(testing.allocator);
     defer buf.deinit();
-    var bw = try huffmanBitWriter(buf.writer());
+    var bw = huffmanBitWriter(buf.writer());
 
     switch (ttype) {
         .write_block => try bw.writeBlock(ht_tokens, true, input),
