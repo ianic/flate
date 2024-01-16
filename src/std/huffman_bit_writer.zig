@@ -3,7 +3,7 @@ const io = std.io;
 
 const deflate_const = @import("deflate_const.zig");
 const hm_code = @import("huffman_code.zig");
-const Token = @import("token.zig").Token;
+const Token = @import("../token.zig").Token;
 
 // The first length code.
 const length_codes_start = 257;
@@ -24,7 +24,7 @@ const buffer_flush_size = 240;
 const buffer_size = buffer_flush_size + 8;
 
 // The number of extra bits needed by length code X - LENGTH_CODES_START.
-var length_extra_bits = [_]u8{
+var length_extra_bits = [_]u8{ // TODO: why not const
     0, 0, 0, // 257
     0, 0, 0, 0, 0, 1, 1, 1, 1, 2, // 260
     2, 2, 2, 3, 3, 3, 3, 4, 4, 4, // 270
@@ -605,7 +605,7 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
 
             for (tokens) |t| {
                 if (t.kind == Token.Kind.literal) {
-                    self.literal_freq[t.symbol()] += 1;
+                    self.literal_freq[t.literal()] += 1;
                     continue;
                 }
                 self.literal_freq[length_codes_start + t.lengthCode()] += 1;
@@ -651,11 +651,11 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
             }
             for (tokens) |t| {
                 if (t.kind == Token.Kind.literal) {
-                    try self.writeCode(le_codes[t.symbol()]);
+                    try self.writeCode(le_codes[t.literal()]);
                     continue;
                 }
                 // Write the length
-                const length = t.lc_sym; // TODO: napravi nesto
+                const length = t.length();
                 const length_code = t.lengthCode();
                 try self.writeCode(le_codes[length_code + length_codes_start]);
                 const extra_length_bits = @as(u32, @intCast(length_extra_bits[length_code]));
@@ -664,7 +664,7 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
                     try self.writeBits(extra_length, extra_length_bits);
                 }
                 // Write the offset
-                const offset = t.dc; // TODO:
+                const offset = t.offset();
                 const offset_code = t.offsetCode();
                 try self.writeCode(oe_codes[offset_code]);
                 const extra_offset_bits = @as(u32, @intCast(offset_extra_bits[offset_code]));

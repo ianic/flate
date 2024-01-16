@@ -1,35 +1,10 @@
 const std = @import("std");
 const assert = std.debug.assert;
-
-// TODO: remove to common place
-const limits = struct {
-    const block = struct {
-        const tokens = 1 << 14;
-    };
-    const match = struct {
-        const base_length = 3; // smallest match length per the RFC section 3.2.5
-        const min_length = 4; // min length used in this algorithm
-        const max_length = 258;
-
-        const min_distance = 1;
-        const max_distance = 32768;
-    };
-    const window = struct { // TODO: consider renaming this into history
-        const bits = 15;
-        const size = 1 << bits;
-        const mask = size - 1;
-    };
-    const hash = struct {
-        const bits = 17;
-        const size = 1 << bits;
-        const mask = size - 1;
-        const shift = 32 - bits;
-    };
-};
+const consts = @import("consts.zig");
 
 // The length code for length X (MIN_MATCH_LENGTH <= X <= MAX_MATCH_LENGTH)
 // is length_codes[length - MIN_MATCH_LENGTH]
-const length_codes = [_]u32{
+const length_codes = [_]u32{ // TODO: why u32
     0,  1,  2,  3,  4,  5,  6,  7,  8,  8,
     9,  9,  10, 10, 11, 11, 12, 12, 12, 12,
     13, 13, 13, 13, 14, 14, 14, 14, 15, 15,
@@ -58,7 +33,7 @@ const length_codes = [_]u32{
     27, 27, 27, 27, 27, 28,
 };
 
-const offset_codes = [_]u32{
+const offset_codes = [_]u32{ // TODO: why u32
     0,  1,  2,  3,  4,  4,  5,  5,  6,  6,  6,  6,  7,  7,  7,  7,
     8,  8,  8,  8,  8,  8,  8,  8,  9,  9,  9,  9,  9,  9,  9,  9,
     10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10,
@@ -78,67 +53,56 @@ const offset_codes = [_]u32{
 };
 
 pub const Token = struct {
-    pub const Kind = enum(u2) {
+    pub const Kind = enum(u1) {
         literal,
         match,
-        end_of_block,
     };
 
-    dc: u16 = 0, // distance code: (1 - 32768) - 1
-    lc_sym: u8 = 0, // length code: (3 - 258) - 3, or symbol
+    off: u15 = 0, // offset: (1 - 32768) - 1
+    len_lit: u8 = 0, // length: (3 - 258) - 3, or literal
     kind: Kind = .literal,
 
-    pub fn symbol(t: Token) u8 {
-        return t.lc_sym;
+    pub fn literal(t: Token) u8 {
+        return t.len_lit;
     }
 
-    pub fn distance(t: Token) u16 {
-        return if (t.kind == .match) @as(u16, t.dc) + limits.match.min_distance else 0;
+    pub fn offset(t: Token) u16 {
+        return t.off;
     }
 
     pub fn length(t: Token) u16 {
-        return if (t.kind == .match) @as(u16, t.lc_sym) + limits.match.base_length else 1;
+        return t.len_lit;
     }
 
-    pub fn initLiteral(sym: u8) Token {
-        return .{ .kind = .literal, .lc_sym = sym };
+    pub fn initLiteral(lit: u8) Token {
+        return .{ .kind = .literal, .len_lit = lit };
     }
 
-    pub fn initMatch(dis: usize, len: usize) Token {
-        assert(len >= limits.match.min_length and len <= limits.match.max_length);
-        assert(dis >= limits.match.min_distance and dis <= limits.match.max_distance);
+    // offset range 1 - 32768, stored in off as 0 - 32767 (u16)
+    // length range 3 - 258, stored in len_lit as 0 - 255 (u8)
+    pub fn initMatch(off: u16, len: u16) Token {
+        assert(len >= consts.match.min_length and len <= consts.match.max_length);
+        assert(off >= consts.match.min_distance and off <= consts.match.max_distance);
         return .{
             .kind = .match,
-            .dc = @intCast(dis - limits.match.min_distance),
-            .lc_sym = @intCast(len - limits.match.base_length),
+            .off = @intCast(off - consts.match.min_distance),
+            .len_lit = @intCast(len - consts.match.base_length),
         };
-    }
-
-    pub fn endOfBlock() Token {
-        return .{ .kind = .end_of_block };
     }
 
     pub fn eql(t: Token, o: Token) bool {
         return t.kind == o.kind and
-            t.dc == o.dc and
-            t.lc_sym == o.lc_sym;
-    }
-
-    pub fn string(t: Token) void {
-        switch (t.kind) {
-            .literal => std.debug.print("L('{c}') \n", .{t.symbol()}),
-            .match => std.debug.print("R({d}, {d}) \n", .{ t.distance(), t.length() }),
-            .end_of_block => std.debug.print("E()", .{}),
-        }
+            t.off == o.off and
+            t.len_lit == o.len_lit;
     }
 
     pub fn lengthCode(t: Token) u32 {
-        return length_codes[t.lc_sym];
+        return length_codes[t.len_lit];
     }
 
     // Returns the offset code corresponding to a specific offset
     pub fn offsetCode(t: Token) u32 {
-        var off: u32 = t.dc;
+        var off: u32 = t.off;
         if (off < @as(u32, @intCast(offset_codes.len))) {
             return offset_codes[off];
         }
@@ -150,3 +114,15 @@ pub const Token = struct {
         return offset_codes[off] + 28;
     }
 };
+
+const print = std.debug.print;
+
+test "Token size" {
+    print("bit_offset: {d} {d} {d} size of: {d}\n", .{
+        @bitOffsetOf(Token, "off"),
+        @bitOffsetOf(Token, "len_lit"),
+        @bitOffsetOf(Token, "kind"),
+        @sizeOf(Token),
+    });
+    //try expect(@sizeOf(Token) == 4);
+}

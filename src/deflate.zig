@@ -3,32 +3,8 @@ const assert = std.debug.assert;
 const testing = std.testing;
 const expect = testing.expect;
 const print = std.debug.print;
-const Token = @import("std/token.zig").Token;
-
-const limits = struct {
-    const block = struct {
-        const tokens = 1 << 14;
-    };
-    const match = struct {
-        const base_length = 3; // smallest match length per the RFC section 3.2.5
-        const min_length = 4; // min length used in this algorithm
-        const max_length = 258;
-
-        const min_distance = 1;
-        const max_distance = 32768;
-    };
-    const window = struct { // TODO: consider renaming this into history
-        const bits = 15;
-        const size = 1 << bits;
-        const mask = size - 1;
-    };
-    const hash = struct {
-        const bits = 17;
-        const size = 1 << bits;
-        const mask = size - 1;
-        const shift = 32 - bits;
-    };
-};
+const Token = @import("token.zig").Token;
+const consts = @import("consts.zig");
 
 pub fn deflateWriter(writer: anytype) Deflate(@TypeOf(writer)) {
     return Deflate(@TypeOf(writer)).init(writer);
@@ -66,11 +42,11 @@ pub fn Deflate(comptime WriterType: type) type {
             var tries: usize = 128; // TODO: this is just hack
             while (match_pos != Hasher.not_found and tries > 0) : (tries -= 1) {
                 const distance = curr_pos - match_pos;
-                if (distance > limits.match.max_distance or
+                if (distance > consts.match.max_distance or
                     match_pos < self.win.offset) break;
                 const match_length = self.win.match(match_pos, curr_pos);
                 if (match_length > length) {
-                    token = Token.initMatch(distance, match_length);
+                    token = Token.initMatch(@intCast(distance), match_length);
                     length = match_length;
                 }
                 match_pos = self.hasher.prev(match_pos);
@@ -88,7 +64,7 @@ pub fn Deflate(comptime WriterType: type) type {
         // Process data in window and create tokens.
         // If token buffer is full flush tokens to the token writer.
         fn processWindow(self: *Self, opt: ProcessOption) !void {
-            const min_lookahead: usize = if (opt == .none) limits.match.max_length else 0;
+            const min_lookahead: usize = if (opt == .none) consts.match.max_length else 0;
 
             while (self.nextToken(min_lookahead)) |token| {
                 self.tokens.add(token);
@@ -216,9 +192,9 @@ fn matchLength(src: []const u8, prev: usize, pos: usize) u16 {
 }
 
 const StreamWindow = struct {
-    const hist_len = limits.window.size;
+    const hist_len = consts.window.size;
     const buffer_len = 2 * hist_len;
-    const max_rp = buffer_len - (limits.match.min_length + limits.match.max_length);
+    const max_rp = buffer_len - (consts.match.min_length + consts.match.max_length);
     const max_offset = (1 << 32) - (2 * buffer_len);
 
     buffer: [buffer_len]u8 = undefined,
@@ -274,7 +250,7 @@ const StreamWindow = struct {
     }
 
     // Finds match length between previous and current position.
-    pub fn match(self: *StreamWindow, prev: usize, curr: usize) usize {
+    pub fn match(self: *StreamWindow, prev: usize, curr: usize) u16 {
         //if (!(prev > self.offset and curr > prev)) {
         //if (self.offset > 0)
         //            print("match prev: {d}, self.offset: {d}, curr: {d}\n", .{ prev, self.offset, curr });
@@ -282,13 +258,13 @@ const StreamWindow = struct {
         assert(prev >= self.offset and curr > prev);
         var p1: usize = prev - self.offset;
         var p2: usize = curr - self.offset;
-        var n: usize = 0;
-        while (p2 < self.wp and self.buffer[p1] == self.buffer[p2] and n < limits.match.max_length) {
+        var n: u16 = 0;
+        while (p2 < self.wp and self.buffer[p1] == self.buffer[p2] and n < consts.match.max_length) {
             n += 1;
             p1 += 1;
             p2 += 1;
         }
-        return if (n > limits.match.min_length) n else 0;
+        return if (n > consts.match.min_length) n else 0;
     }
 
     pub fn pos(self: *StreamWindow) usize {
@@ -330,10 +306,10 @@ test "StreamWindow slide" {
 const Hasher = struct {
     const mul = 0x1e35a7bd;
     const not_found = (1 << 32) - 1;
-    const mask = limits.window.mask;
+    const mask = consts.window.mask;
 
-    head: [limits.hash.size]u32 = [_]u32{not_found} ** limits.hash.size,
-    chain: [limits.window.size]u32 = [_]u32{not_found} ** (limits.window.size),
+    head: [consts.hash.size]u32 = [_]u32{not_found} ** consts.hash.size,
+    chain: [consts.window.size]u32 = [_]u32{not_found} ** (consts.window.size),
 
     fn add(self: *Hasher, data: []const u8, idx: u32) u32 {
         if (data.len < 4) return not_found;
@@ -370,7 +346,7 @@ const Hasher = struct {
         var i: u32 = idx;
         for (0..len) |j| {
             const d = data[j..];
-            if (d.len < limits.match.min_length) return;
+            if (d.len < consts.match.min_length) return;
             _ = self.add(d, i);
             i += 1;
         }
@@ -380,11 +356,11 @@ const Hasher = struct {
         return (((@as(u32, b[3]) |
             @as(u32, b[2]) << 8 |
             @as(u32, b[1]) << 16 |
-            @as(u32, b[0]) << 24) *% mul) >> limits.hash.shift) & limits.hash.mask;
+            @as(u32, b[0]) << 24) *% mul) >> consts.hash.shift) & consts.hash.mask;
     }
 
     fn bulk(b: []u8, dst: []u32) u32 {
-        if (b.len < limits.match.min_length) {
+        if (b.len < consts.match.min_length) {
             return 0;
         }
         var hb =
@@ -393,12 +369,12 @@ const Hasher = struct {
             @as(u32, b[1]) << 16 |
             @as(u32, b[0]) << 24;
 
-        dst[0] = (hb *% mul) >> limits.hash.shift;
-        const end = b.len - limits.match.min_length + 1;
+        dst[0] = (hb *% mul) >> consts.hash.shift;
+        const end = b.len - consts.match.min_length + 1;
         var i: u32 = 1;
         while (i < end) : (i += 1) {
             hb = (hb << 8) | @as(u32, b[i + 3]);
-            dst[i] = (hb *% mul) >> limits.hash.shift;
+            dst[i] = (hb *% mul) >> consts.hash.shift;
         }
         return hb;
     }
@@ -443,7 +419,7 @@ test "Token size" {
 }
 
 const Tokens = struct {
-    list: [limits.block.tokens]Token = undefined,
+    list: [consts.block.tokens]Token = undefined,
     pos: usize = 0,
 
     fn add(self: *Tokens, t: Token) void {
@@ -456,7 +432,7 @@ const Tokens = struct {
     }
 
     fn full(self: *Tokens) bool {
-        return self.pos == limits.block.tokens;
+        return self.pos == consts.block.tokens;
     }
 
     fn reset(self: *Tokens) void {
@@ -470,16 +446,6 @@ const Tokens = struct {
 
     fn tokens(self: *Tokens) []const Token {
         return self.list[0..self.pos];
-    }
-
-    fn toStd(self: *Tokens, s: []std_token.Token) void {
-        for (self.tokens(), 0..) |t, i| {
-            s[i] = switch (t.kind) {
-                .literal => std_token.literalToken(t.symbol()),
-                .match => std_token.matchToken(t.length(), t.distance()),
-                else => unreachable,
-            };
-        }
     }
 };
 
@@ -539,7 +505,6 @@ const StdoutTokenWriter = struct {
     }
 };
 
-const std_token = @import("std/token.zig");
 const hm_bw = @import("std/huffman_bit_writer.zig");
 
 test "deflate compress file" {
@@ -576,7 +541,6 @@ pub fn tokenWriter(writer: anytype) TokenWriter(@TypeOf(writer)) {
 fn TokenWriter(comptime WriterType: type) type {
     return struct {
         hw_bw: hm_bw.HuffmanBitWriter(WriterType),
-        tokens: [limits.block.tokens]std_token.Token = undefined,
 
         const Self = @This();
 
