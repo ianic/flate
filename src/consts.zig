@@ -23,3 +23,21 @@ pub const hash = struct {
     pub const mask = size - 1;
     pub const shift = 32 - bits;
 };
+
+// Huffman Codes
+
+// The largest offset code.
+pub const offset_code_count = 30;
+// Max number of frequencies used for a Huffman Code
+// Possible lengths are codegenCodeCount (19), offset_code_count (30) and max_num_lit (286).
+// The largest of these is max_num_lit.
+pub const max_num_frequencies = max_num_lit;
+// Maximum number of literals.
+pub const max_num_lit = 286;
+
+// Deflate
+
+// Biggest block size for uncompressed block.
+pub const max_store_block_size = 65535;
+// The special code used to mark the end of a block.
+pub const end_block_marker = 256;

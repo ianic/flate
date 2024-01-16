@@ -5,10 +5,7 @@ const mem = std.mem;
 const sort = std.sort;
 const testing = std.testing;
 
-const Allocator = std.mem.Allocator;
-
-const bu = @import("bits_utils.zig");
-const deflate_const = @import("deflate_const.zig");
+const consts = @import("consts.zig");
 
 const max_bits_limit = 16;
 
@@ -54,7 +51,7 @@ pub fn HuffmanEncoder(comptime size: usize) type {
         codes: [size]HuffCode = undefined,
         // Reusable buffer with the longest possible frequency table.
         // (deflate_const.max_num_frequencies).
-        freq_cache: [deflate_const.max_num_frequencies + 1]LiteralNode = undefined,
+        freq_cache: [consts.max_num_frequencies + 1]LiteralNode = undefined,
         bit_count: [17]u32 = undefined,
         lns: []LiteralNode = undefined, // sorted by literal, stored to avoid repeated allocation in generate
         lfs: []LiteralNode = undefined, // sorted by frequency, stored to avoid repeated allocation in generate
@@ -273,7 +270,7 @@ pub fn HuffmanEncoder(comptime size: usize) type {
 
                 for (chunk) |node| {
                     self.codes[node.literal] = HuffCode{
-                        .code = bu.bitReverse(u16, code, @as(u5, @intCast(n))),
+                        .code = bitReverse(u16, code, @as(u5, @intCast(n))),
                         .len = @as(u16, @intCast(n)),
                     };
                     code += 1;
@@ -295,8 +292,8 @@ pub fn huffmanEncoder(comptime size: u32) HuffmanEncoder(size) {
     return .{};
 }
 
-pub const LiteralEncoder = HuffmanEncoder(deflate_const.max_num_frequencies);
-pub const OffsetEncoder = HuffmanEncoder(deflate_const.offset_code_count);
+pub const LiteralEncoder = HuffmanEncoder(consts.max_num_frequencies);
+pub const OffsetEncoder = HuffmanEncoder(consts.offset_code_count);
 pub const CodegenEncoder = HuffmanEncoder(19);
 
 // Generates a HuffmanCode corresponding to the fixed literal table
@@ -304,7 +301,7 @@ pub fn fixedLiteralEncoder() LiteralEncoder {
     var h: LiteralEncoder = undefined;
     var ch: u16 = 0;
 
-    while (ch < deflate_const.max_num_frequencies) : (ch += 1) {
+    while (ch < consts.max_num_frequencies) : (ch += 1) {
         var bits: u16 = undefined;
         var size: u16 = undefined;
         switch (ch) {
@@ -329,7 +326,7 @@ pub fn fixedLiteralEncoder() LiteralEncoder {
                 size = 8;
             },
         }
-        h.codes[ch] = HuffCode{ .code = bu.bitReverse(u16, bits, @as(u5, @intCast(size))), .len = size };
+        h.codes[ch] = HuffCode{ .code = bitReverse(u16, bits, @as(u5, @intCast(size))), .len = size };
     }
     return h;
 }
@@ -337,7 +334,7 @@ pub fn fixedLiteralEncoder() LiteralEncoder {
 pub fn fixedOffsetEncoder() OffsetEncoder {
     var h: OffsetEncoder = undefined;
     for (h.codes, 0..) |_, ch| {
-        h.codes[ch] = HuffCode{ .code = bu.bitReverse(u16, @as(u16, @intCast(ch)), 5), .len = 5 };
+        h.codes[ch] = HuffCode{ .code = bitReverse(u16, @as(u16, @intCast(ch)), 5), .len = 5 };
     }
     return h;
 }
@@ -444,5 +441,35 @@ test "generate a Huffman code for the 30 possible relative offsets (LZ77 distanc
         const v = @bitReverse(@as(u5, @intCast(c.code)));
         try testing.expect(v <= 29);
         try testing.expect(c.len == 5);
+    }
+}
+
+// Reverse bit-by-bit a N-bit code.
+inline fn bitReverse(comptime T: type, value: T, n: usize) T {
+    const r = @bitReverse(value);
+    return r >> @as(math.Log2Int(T), @intCast(@typeInfo(T).Int.bits - n));
+}
+
+test "bitReverse" {
+    const ReverseBitsTest = struct {
+        in: u16,
+        bit_count: u5,
+        out: u16,
+    };
+
+    const reverse_bits_tests = [_]ReverseBitsTest{
+        .{ .in = 1, .bit_count = 1, .out = 1 },
+        .{ .in = 1, .bit_count = 2, .out = 2 },
+        .{ .in = 1, .bit_count = 3, .out = 4 },
+        .{ .in = 1, .bit_count = 4, .out = 8 },
+        .{ .in = 1, .bit_count = 5, .out = 16 },
+        .{ .in = 17, .bit_count = 5, .out = 17 },
+        .{ .in = 257, .bit_count = 9, .out = 257 },
+        .{ .in = 29, .bit_count = 5, .out = 23 },
+    };
+
+    for (reverse_bits_tests) |h| {
+        const v = bitReverse(u16, h.in, h.bit_count);
+        try std.testing.expectEqual(h.out, v);
     }
 }

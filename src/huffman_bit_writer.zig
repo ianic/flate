@@ -1,9 +1,9 @@
 const std = @import("std");
 const io = std.io;
 
-const deflate_const = @import("deflate_const.zig");
-const hm_code = @import("huffman_code.zig");
-const Token = @import("../token.zig").Token;
+const consts = @import("consts.zig");
+const hc = @import("huffman_code.zig");
+const Token = @import("Token.zig");
 
 // The first length code.
 const length_codes_start = 257;
@@ -24,7 +24,7 @@ const buffer_flush_size = 240;
 const buffer_size = buffer_flush_size + 8;
 
 // The number of extra bits needed by length code X - LENGTH_CODES_START.
-var length_extra_bits = [_]u8{ // TODO: why not const
+const length_extra_bits = [_]u8{
     0, 0, 0, // 257
     0, 0, 0, 0, 0, 1, 1, 1, 1, 2, // 260
     2, 2, 2, 3, 3, 3, 3, 4, 4, 4, // 270
@@ -32,26 +32,26 @@ var length_extra_bits = [_]u8{ // TODO: why not const
 };
 
 // The length indicated by length code X - LENGTH_CODES_START.
-var length_base = [_]u32{
+const length_base = [_]u8{
     0,  1,  2,  3,   4,   5,   6,   7,   8,   10,
     12, 14, 16, 20,  24,  28,  32,  40,  48,  56,
     64, 80, 96, 112, 128, 160, 192, 224, 255,
 };
 
 // offset code word extra bits.
-var offset_extra_bits = [_]i8{
+const offset_extra_bits = [_]u8{
     0, 0, 0,  0,  1,  1,  2,  2,  3,  3,
     4, 4, 5,  5,  6,  6,  7,  7,  8,  8,
     9, 9, 10, 10, 11, 11, 12, 12, 13, 13,
 };
 
-var offset_base = [_]u32{
-    0x000000, 0x000001, 0x000002, 0x000003, 0x000004,
-    0x000006, 0x000008, 0x00000c, 0x000010, 0x000018,
-    0x000020, 0x000030, 0x000040, 0x000060, 0x000080,
-    0x0000c0, 0x000100, 0x000180, 0x000200, 0x000300,
-    0x000400, 0x000600, 0x000800, 0x000c00, 0x001000,
-    0x001800, 0x002000, 0x003000, 0x004000, 0x006000,
+const offset_base = [_]u16{
+    0x0000, 0x0001, 0x0002, 0x0003, 0x0004,
+    0x0006, 0x0008, 0x000c, 0x0010, 0x0018,
+    0x0020, 0x0030, 0x0040, 0x0060, 0x0080,
+    0x00c0, 0x0100, 0x0180, 0x0200, 0x0300,
+    0x0400, 0x0600, 0x0800, 0x0c00, 0x1000,
+    0x1800, 0x2000, 0x3000, 0x4000, 0x6000,
 };
 
 // The odd order in which the codegen code sizes are written.
@@ -60,7 +60,7 @@ var codegen_order = [_]u32{ 16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 
 pub fn HuffmanBitWriter(comptime WriterType: type) type {
     return struct {
         const Self = @This();
-        pub const Error = WriterType.Error;
+        pub const Error = WriterType.Error || error{UnfinishedBits};
 
         // writer is the underlying writer.
         // Do not use it directly; use the write method, which ensures
@@ -76,16 +76,15 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
         bytes: [buffer_size]u8,
         codegen_freq: [codegen_code_count]u16,
         nbytes: u32, // number of bytes
-        literal_freq: [deflate_const.max_num_lit]u16,
-        offset_freq: [deflate_const.offset_code_count]u16,
-        codegen: [deflate_const.max_num_lit + deflate_const.offset_code_count + 1]u8,
-        literal_encoding: hm_code.LiteralEncoder,
-        offset_encoding: hm_code.OffsetEncoder,
-        codegen_encoding: hm_code.CodegenEncoder,
-        err: bool = false,
-        fixed_literal_encoding: hm_code.LiteralEncoder,
-        fixed_offset_encoding: hm_code.OffsetEncoder,
-        huff_offset: hm_code.OffsetEncoder,
+        literal_freq: [consts.max_num_lit]u16,
+        offset_freq: [consts.offset_code_count]u16,
+        codegen: [consts.max_num_lit + consts.offset_code_count + 1]u8,
+        literal_encoding: hc.LiteralEncoder,
+        offset_encoding: hc.OffsetEncoder,
+        codegen_encoding: hc.CodegenEncoder,
+        fixed_literal_encoding: hc.LiteralEncoder,
+        fixed_offset_encoding: hc.OffsetEncoder,
+        huff_offset: hc.OffsetEncoder,
 
         pub fn reset(self: *Self, new_writer: WriterType) void {
             self.inner_writer = new_writer;
@@ -93,14 +92,9 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
             self.bits = 0;
             self.nbits = 0;
             self.nbytes = 0;
-            self.err = false;
         }
 
         pub fn flush(self: *Self) Error!void {
-            if (self.err) {
-                self.nbits = 0;
-                return;
-            }
             var n = self.nbytes;
             while (self.nbits != 0) {
                 self.bytes[n] = @as(u8, @truncate(self.bits));
@@ -118,16 +112,10 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
         }
 
         fn write(self: *Self, b: []const u8) Error!void {
-            if (self.err) {
-                return;
-            }
             self.bytes_written += try self.inner_writer.write(b);
         }
 
         fn writeBits(self: *Self, b: u32, nb: u32) Error!void {
-            if (self.err) {
-                return;
-            }
             self.bits |= @as(u64, @intCast(b)) << @as(u6, @intCast(self.nbits));
             self.nbits += nb;
             if (self.nbits >= 48) {
@@ -152,13 +140,9 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
         }
 
         pub fn writeBytes(self: *Self, bytes: []const u8) Error!void {
-            if (self.err) {
-                return;
-            }
             var n = self.nbytes;
             if (self.nbits & 7 != 0) {
-                self.err = true; // unfinished bits
-                return;
+                return error.UnfinishedBits;
             }
             while (self.nbits != 0) {
                 self.bytes[n] = @as(u8, @truncate(self.bits));
@@ -190,8 +174,8 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
             self: *Self,
             num_literals: u32,
             num_offsets: u32,
-            lit_enc: *hm_code.LiteralEncoder,
-            off_enc: *hm_code.OffsetEncoder,
+            lit_enc: *hc.LiteralEncoder,
+            off_enc: *hc.OffsetEncoder,
         ) void {
             for (self.codegen_freq, 0..) |_, i| {
                 self.codegen_freq[i] = 0;
@@ -284,8 +268,8 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
         // dynamicSize returns the size of dynamically encoded data in bits.
         fn dynamicSize(
             self: *Self,
-            lit_enc: *hm_code.LiteralEncoder, // literal encoder
-            off_enc: *hm_code.OffsetEncoder, // offset encoder
+            lit_enc: *hc.LiteralEncoder, // literal encoder
+            off_enc: *hc.OffsetEncoder, // offset encoder
             extra_bits: u32,
         ) DynamicSize {
             var num_codegens = self.codegen_freq.len;
@@ -323,16 +307,13 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
             if (in == null) {
                 return .{ .size = 0, .storable = false };
             }
-            if (in.?.len <= deflate_const.max_store_block_size) {
+            if (in.?.len <= consts.max_store_block_size) {
                 return .{ .size = @as(u32, @intCast((in.?.len + 5) * 8)), .storable = true };
             }
             return .{ .size = 0, .storable = false };
         }
 
-        fn writeCode(self: *Self, c: hm_code.HuffCode) Error!void {
-            if (self.err) {
-                return;
-            }
+        fn writeCode(self: *Self, c: hc.HuffCode) Error!void {
             self.bits |= @as(u64, @intCast(c.code)) << @as(u6, @intCast(self.nbits));
             self.nbits += @as(u32, @intCast(c.len));
             if (self.nbits >= 48) {
@@ -369,22 +350,16 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
             num_codegens: u32,
             is_eof: bool,
         ) Error!void {
-            if (self.err) {
-                return;
-            }
-            var first_bits: u32 = 4;
-            if (is_eof) {
-                first_bits = 5;
-            }
+            const first_bits: u32 = if (is_eof) 5 else 4;
             try self.writeBits(first_bits, 3);
-            try self.writeBits(@as(u32, @intCast(num_literals - 257)), 5);
-            try self.writeBits(@as(u32, @intCast(num_offsets - 1)), 5);
-            try self.writeBits(@as(u32, @intCast(num_codegens - 4)), 4);
+            try self.writeBits(num_literals - 257, 5);
+            try self.writeBits(num_offsets - 1, 5);
+            try self.writeBits(num_codegens - 4, 4);
 
             var i: u32 = 0;
             while (i < num_codegens) : (i += 1) {
-                const value = @as(u32, @intCast(self.codegen_encoding.codes[codegen_order[i]].len));
-                try self.writeBits(@as(u32, @intCast(value)), 3);
+                const value = self.codegen_encoding.codes[codegen_order[i]].len;
+                try self.writeBits(value, 3);
             }
 
             i = 0;
@@ -398,15 +373,15 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
 
                 switch (code_word) {
                     16 => {
-                        try self.writeBits(@as(u32, @intCast(self.codegen[i])), 2);
+                        try self.writeBits(self.codegen[i], 2);
                         i += 1;
                     },
                     17 => {
-                        try self.writeBits(@as(u32, @intCast(self.codegen[i])), 3);
+                        try self.writeBits(self.codegen[i], 3);
                         i += 1;
                     },
                     18 => {
-                        try self.writeBits(@as(u32, @intCast(self.codegen[i])), 7);
+                        try self.writeBits(self.codegen[i], 7);
                         i += 1;
                     },
                     else => {},
@@ -415,23 +390,15 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
         }
 
         pub fn writeStoredHeader(self: *Self, length: usize, is_eof: bool) Error!void {
-            if (self.err) {
-                return;
-            }
-            var flag: u32 = 0;
-            if (is_eof) {
-                flag = 1;
-            }
+            const flag: u32 = if (is_eof) 1 else 0;
             try self.writeBits(flag, 3);
             try self.flush();
-            try self.writeBits(@as(u32, @intCast(length)), 16);
-            try self.writeBits(@as(u32, @intCast(~@as(u16, @intCast(length)))), 16);
+            const l: u16 = @intCast(length);
+            try self.writeBits(l, 16);
+            try self.writeBits(~l, 16);
         }
 
         fn writeFixedHeader(self: *Self, is_eof: bool) Error!void {
-            if (self.err) {
-                return;
-            }
             // Indicate that we are a fixed Huffman block
             var value: u32 = 2;
             if (is_eof) {
@@ -451,10 +418,6 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
             eof: bool,
             input: ?[]const u8,
         ) Error!void {
-            if (self.err) {
-                return;
-            }
-
             const lit_and_off = self.indexTokens(tokens);
             const num_literals = lit_and_off.num_literals;
             const num_offsets = lit_and_off.num_offsets;
@@ -544,10 +507,6 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
             eof: bool,
             input: ?[]const u8,
         ) Error!void {
-            if (self.err) {
-                return;
-            }
-
             const total_tokens = self.indexTokens(tokens);
             const num_literals = total_tokens.num_literals;
             const num_offsets = total_tokens.num_offsets;
@@ -612,7 +571,7 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
                 self.offset_freq[t.offsetCode()] += 1;
             }
             // add end_block_marker token at the end
-            self.literal_freq[deflate_const.end_block_marker] += 1;
+            self.literal_freq[consts.end_block_marker] += 1;
 
             // get the number of literals
             num_literals = @as(u32, @intCast(self.literal_freq.len));
@@ -643,12 +602,9 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
         fn writeTokens(
             self: *Self,
             tokens: []const Token,
-            le_codes: []hm_code.HuffCode,
-            oe_codes: []hm_code.HuffCode,
+            le_codes: []hc.HuffCode,
+            oe_codes: []hc.HuffCode,
         ) Error!void {
-            if (self.err) {
-                return;
-            }
             for (tokens) |t| {
                 if (t.kind == Token.Kind.literal) {
                     try self.writeCode(le_codes[t.literal()]);
@@ -658,32 +614,28 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
                 const length = t.length();
                 const length_code = t.lengthCode();
                 try self.writeCode(le_codes[length_code + length_codes_start]);
-                const extra_length_bits = @as(u32, @intCast(length_extra_bits[length_code]));
+                const extra_length_bits: u8 = length_extra_bits[length_code];
                 if (extra_length_bits > 0) {
-                    const extra_length = @as(u32, @intCast(length - length_base[length_code]));
+                    const extra_length: u8 = length - length_base[length_code];
                     try self.writeBits(extra_length, extra_length_bits);
                 }
                 // Write the offset
                 const offset = t.offset();
                 const offset_code = t.offsetCode();
                 try self.writeCode(oe_codes[offset_code]);
-                const extra_offset_bits = @as(u32, @intCast(offset_extra_bits[offset_code]));
+                const extra_offset_bits: u8 = offset_extra_bits[offset_code];
                 if (extra_offset_bits > 0) {
-                    const extra_offset = @as(u32, @intCast(offset - offset_base[offset_code]));
+                    const extra_offset: u16 = offset - offset_base[offset_code];
                     try self.writeBits(extra_offset, extra_offset_bits);
                 }
             }
             // add end_block_marker at the end
-            try self.writeCode(le_codes[deflate_const.end_block_marker]);
+            try self.writeCode(le_codes[consts.end_block_marker]);
         }
 
         // Encodes a block of bytes as either Huffman encoded literals or uncompressed bytes
         // if the results only gains very little from compression.
         pub fn writeBlockHuff(self: *Self, eof: bool, input: []const u8) Error!void {
-            if (self.err) {
-                return;
-            }
-
             // Clear histogram
             for (self.literal_freq, 0..) |_, i| {
                 self.literal_freq[i] = 0;
@@ -692,9 +644,9 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
             // Add everything as literals
             histogram(input, &self.literal_freq);
 
-            self.literal_freq[deflate_const.end_block_marker] = 1;
+            self.literal_freq[consts.end_block_marker] = 1;
 
-            const num_literals = deflate_const.end_block_marker + 1;
+            const num_literals = consts.end_block_marker + 1;
             self.offset_freq[0] = 1;
             const num_offsets = 1;
 
@@ -757,13 +709,10 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
                     continue;
                 }
                 try self.write(self.bytes[0..n]);
-                if (self.err) {
-                    return; // Return early in the event of write failures
-                }
                 n = 0;
             }
             self.nbytes = n;
-            try self.writeCode(encoding[deflate_const.end_block_marker]);
+            try self.writeCode(encoding[consts.end_block_marker]);
         }
     };
 }
@@ -779,11 +728,11 @@ const StoredSize = struct {
 };
 
 pub fn huffmanBitWriter(writer: anytype) HuffmanBitWriter(@TypeOf(writer)) {
-    var offset_freq = [1]u16{0} ** deflate_const.offset_code_count;
+    var offset_freq = [1]u16{0} ** consts.offset_code_count;
     offset_freq[0] = 1;
     // huff_offset is a static offset encoder used for huffman only encoding.
     // It can be reused since we will not be encoding offset values.
-    var huff_offset: hm_code.OffsetEncoder = .{};
+    var huff_offset: hc.OffsetEncoder = .{};
     huff_offset.generate(offset_freq[0..], 15);
 
     return HuffmanBitWriter(@TypeOf(writer)){
@@ -800,8 +749,8 @@ pub fn huffmanBitWriter(writer: anytype) HuffmanBitWriter(@TypeOf(writer)) {
         .literal_encoding = .{},
         .codegen_encoding = .{},
         .offset_encoding = .{},
-        .fixed_literal_encoding = hm_code.fixedLiteralEncoder(),
-        .fixed_offset_encoding = hm_code.fixedOffsetEncoder(),
+        .fixed_literal_encoding = hc.fixedLiteralEncoder(),
+        .fixed_offset_encoding = hc.fixedOffsetEncoder(),
         .huff_offset = huff_offset,
     };
 }

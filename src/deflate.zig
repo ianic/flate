@@ -3,8 +3,9 @@ const assert = std.debug.assert;
 const testing = std.testing;
 const expect = testing.expect;
 const print = std.debug.print;
-const Token = @import("token.zig").Token;
+const Token = @import("Token.zig");
 const consts = @import("consts.zig");
+const hbw = @import("huffman_bit_writer.zig");
 
 pub fn deflateWriter(writer: anytype) Deflate(@TypeOf(writer)) {
     return Deflate(@TypeOf(writer)).init(writer);
@@ -505,8 +506,6 @@ const StdoutTokenWriter = struct {
     }
 };
 
-const hm_bw = @import("std/huffman_bit_writer.zig");
-
 test "deflate compress file" {
     const input_file_name = "testdata/2600.txt.utf-8";
     var input = try std.fs.cwd().openFile(input_file_name, .{});
@@ -540,12 +539,12 @@ pub fn tokenWriter(writer: anytype) TokenWriter(@TypeOf(writer)) {
 
 fn TokenWriter(comptime WriterType: type) type {
     return struct {
-        hw_bw: hm_bw.HuffmanBitWriter(WriterType),
+        hw_bw: hbw.HuffmanBitWriter(WriterType),
 
         const Self = @This();
 
         pub fn init(writer: WriterType) Self {
-            return .{ .hw_bw = hm_bw.huffmanBitWriter(writer) };
+            return .{ .hw_bw = hbw.huffmanBitWriter(writer) };
         }
 
         pub fn write(self: *Self, tokens: []const Token, final: bool) !void {
