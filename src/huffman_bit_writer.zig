@@ -86,7 +86,7 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
         fixed_offset_encoding: hc.OffsetEncoder,
         huff_offset: hc.OffsetEncoder,
 
-        pub fn reset(self: *Self, new_writer: WriterType) void {
+        fn reset(self: *Self, new_writer: WriterType) void {
             self.inner_writer = new_writer;
             self.bytes_written = 0;
             self.bits = 0;
@@ -139,7 +139,7 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
             }
         }
 
-        pub fn writeBytes(self: *Self, bytes: []const u8) Error!void {
+        fn writeBytes(self: *Self, bytes: []const u8) Error!void {
             var n = self.nbytes;
             if (self.nbits & 7 != 0) {
                 return error.UnfinishedBits;
@@ -342,15 +342,15 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
         //  num_literals: The number of literals specified in codegen
         //  num_offsets: The number of offsets specified in codegen
         //  num_codegens: The number of codegens used in codegen
-        //  is_eof: Is it the end-of-file? (end of stream)
+        //  eof: Is it the end-of-file? (end of stream)
         fn writeDynamicHeader(
             self: *Self,
             num_literals: u32,
             num_offsets: u32,
             num_codegens: u32,
-            is_eof: bool,
+            eof: bool,
         ) Error!void {
-            const first_bits: u32 = if (is_eof) 5 else 4;
+            const first_bits: u32 = if (eof) 5 else 4;
             try self.writeBits(first_bits, 3);
             try self.writeBits(num_literals - 257, 5);
             try self.writeBits(num_offsets - 1, 5);
@@ -389,8 +389,8 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
             }
         }
 
-        pub fn writeStoredHeader(self: *Self, length: usize, is_eof: bool) Error!void {
-            const flag: u32 = if (is_eof) 1 else 0;
+        fn writeStoredHeader(self: *Self, length: usize, eof: bool) Error!void {
+            const flag: u32 = if (eof) 1 else 0;
             try self.writeBits(flag, 3);
             try self.flush();
             const l: u16 = @intCast(length);
@@ -398,10 +398,10 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
             try self.writeBits(~l, 16);
         }
 
-        fn writeFixedHeader(self: *Self, is_eof: bool) Error!void {
+        fn writeFixedHeader(self: *Self, eof: bool) Error!void {
             // Indicate that we are a fixed Huffman block
             var value: u32 = 2;
-            if (is_eof) {
+            if (eof) {
                 value = 3;
             }
             try self.writeBits(value, 3);
@@ -480,8 +480,7 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
 
             // Stored bytes?
             if (storable and stored_size < size) {
-                try self.writeStoredHeader(input.?.len, eof);
-                try self.writeBytes(input.?);
+                try self.writeBlockStored(input.?, eof);
                 return;
             }
 
@@ -496,12 +495,17 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
             try self.writeTokens(tokens, &literal_encoding.codes, &offset_encoding.codes);
         }
 
+        fn writeBlockStored(self: *Self, input: []const u8, eof: bool) Error!void {
+            try self.writeStoredHeader(input.len, eof);
+            try self.writeBytes(input);
+        }
+
         // writeBlockDynamic encodes a block using a dynamic Huffman table.
         // This should be used if the symbols used have a disproportionate
         // histogram distribution.
         // If input is supplied and the compression savings are below 1/16th of the
         // input size the block is stored.
-        pub fn writeBlockDynamic(
+        fn writeBlockDynamic(
             self: *Self,
             tokens: []const Token,
             eof: bool,
@@ -530,8 +534,7 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
             const ssize = stored_size.size;
             const storable = stored_size.storable;
             if (storable and ssize < (size + (size >> 4))) {
-                try self.writeStoredHeader(input.?.len, eof);
-                try self.writeBytes(input.?);
+                try self.writeBlockStored(input.?, eof);
                 return;
             }
 
@@ -633,9 +636,12 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
             try self.writeCode(le_codes[consts.end_block_marker]);
         }
 
+        // TODO: unused remove this, and huff_offset field
+        // TODO: move initializtion to definiton after that
+        //
         // Encodes a block of bytes as either Huffman encoded literals or uncompressed bytes
         // if the results only gains very little from compression.
-        pub fn writeBlockHuff(self: *Self, eof: bool, input: []const u8) Error!void {
+        fn writeBlockHuff(self: *Self, eof: bool, input: []const u8) Error!void {
             // Clear histogram
             for (self.literal_freq, 0..) |_, i| {
                 self.literal_freq[i] = 0;
@@ -676,8 +682,7 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
             const storable = stored_size_ret.storable;
 
             if (storable and ssize < (size + (size >> 4))) {
-                try self.writeStoredHeader(input.len, eof);
-                try self.writeBytes(input);
+                try self.writeBlockStored(input, eof);
                 return;
             }
 

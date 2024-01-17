@@ -24,6 +24,8 @@ pub const hash = struct {
     pub const shift = 32 - bits;
 };
 
+// TODO: organize this
+
 // Huffman Codes
 
 // The largest offset code.

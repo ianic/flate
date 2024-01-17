@@ -12,7 +12,7 @@ pub fn deflateWriter(writer: anytype) Deflate(@TypeOf(writer)) {
 }
 
 pub fn deflate(reader: anytype, writer: anytype) !void {
-    const tw = tokenWriter(writer);
+    const tw = hbw.huffmanBitWriter(writer);
     var df = Deflate(@TypeOf(tw)).init(tw);
     try df.compress(reader);
     try df.close();
@@ -76,7 +76,8 @@ pub fn Deflate(comptime WriterType: type) type {
         }
 
         fn flushTokens(self: *Self, final: bool) !void {
-            try self.token_writer.write(self.tokens.tokens(), final);
+            try self.token_writer.writeBlock(self.tokens.tokens(), final, null);
+            if (final) try self.token_writer.flush();
             self.tokens.reset();
         }
 
@@ -172,12 +173,14 @@ const TestTokenWriter = struct {
     expected: []const Token,
     pos: usize = 0,
 
-    pub fn write(self: *Self, tokens: []const Token, _: bool) !void {
+    pub fn writeBlock(self: *Self, tokens: []const Token, _: bool, _: ?[]const u8) !void {
         for (tokens) |t| {
             try expect(t.eql(self.expected[self.pos]));
             self.pos += 1;
         }
     }
+
+    pub fn flush(_: *Self) !void {}
 };
 
 fn matchLength(src: []const u8, prev: usize, pos: usize) u16 {
@@ -652,30 +655,9 @@ fn Envelope(comptime ReaderType: type, comptime WriterType: type, comptime kind:
     };
 }
 
-test "zlib header calculation" {
+test "zlib FCHECK header 5 bits calculation example" {
     var h = [_]u8{ 0x78, 0b10_0_00000 };
     h[1] += 31 - @as(u8, @intCast(std.mem.readInt(u16, h[0..2], .big) % 31));
     try expect(h[1] == 0b10_0_11100);
     // print("{x} {x} {b}\n", .{ h[0], h[1], h[1] });
-}
-
-pub fn tokenWriter(writer: anytype) TokenWriter(@TypeOf(writer)) {
-    return TokenWriter(@TypeOf(writer)).init(writer);
-}
-
-fn TokenWriter(comptime WriterType: type) type {
-    return struct {
-        hw_bw: hbw.HuffmanBitWriter(WriterType),
-
-        const Self = @This();
-
-        pub fn init(writer: WriterType) Self {
-            return .{ .hw_bw = hbw.huffmanBitWriter(writer) };
-        }
-
-        pub fn write(self: *Self, tokens: []const Token, final: bool) !void {
-            try self.hw_bw.writeBlock(tokens, final, null);
-            if (final) try self.hw_bw.flush();
-        }
-    };
 }
