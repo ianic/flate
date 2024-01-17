@@ -518,48 +518,34 @@ test "deflate compress file" {
     try gzip(input.reader(), output.writer());
 }
 
+test "zlib compress file" {
+    const input_file_name = "testdata/2600.txt.utf-8";
+    var input = try std.fs.cwd().openFile(input_file_name, .{});
+    defer input.close();
+
+    const output_file_name = "testdata/output.zz";
+    var output = try std.fs.cwd().createFile(output_file_name, .{ .truncate = true });
+    defer output.close();
+
+    try zlib(input.reader(), output.writer());
+}
+
 pub fn gzip(reader: anytype, writer: anytype) !void {
-    var ev = envelope(reader, .gzip);
-    try ev.header(writer);
+    var ev = envelope(reader, writer, .gzip);
+    try ev.header();
     try deflate(ev.reader(), writer);
-    try ev.footer(writer);
+    try ev.footer();
 }
 
-// TODO: so far just placeholder
 pub fn zlib(reader: anytype, writer: anytype) !void {
-    var ev = envelope(reader, .zlib);
-    try ev.header(writer);
+    var ev = envelope(reader, writer, .zlib);
+    try ev.header();
     try deflate(ev.reader(), writer);
-    try ev.footer(writer);
+    try ev.footer();
 }
 
-pub fn tokenWriter(writer: anytype) TokenWriter(@TypeOf(writer)) {
-    return TokenWriter(@TypeOf(writer)).init(writer);
-}
-
-fn TokenWriter(comptime WriterType: type) type {
-    return struct {
-        hw_bw: hbw.HuffmanBitWriter(WriterType),
-
-        const Self = @This();
-
-        pub fn init(writer: WriterType) Self {
-            return .{ .hw_bw = hbw.huffmanBitWriter(writer) };
-        }
-
-        pub fn write(self: *Self, tokens: []const Token, final: bool) !void {
-            // for (tokens, 0..) |t, i| {
-            //     self.tokens[i] = switch (t.kind) {
-            //         .literal => std_token.literalToken(t.symbol()),
-            //         .match => std_token.matchToken(t.lc_sym, t.dc),
-            //         else => unreachable,
-            //     };
-            // }
-            // const std_tokens = self.tokens[0..tokens.len];
-            try self.hw_bw.writeBlock(tokens, final, null);
-            if (final) try self.hw_bw.flush();
-        }
-    };
+pub fn envelope(reader: anytype, writer: anytype, comptime kind: EnvelopeKind) Envelope(@TypeOf(reader), @TypeOf(writer), kind) {
+    return .{ .rdr = reader, .wrt = writer };
 }
 
 const EnvelopeKind = enum {
@@ -567,7 +553,10 @@ const EnvelopeKind = enum {
     zlib,
 };
 
-pub fn Envelope(comptime ReaderType: type, comptime kind: EnvelopeKind) type {
+/// Adds protocol header and footer for gzip or zlib compression. Needs to read
+/// all uncompressed data to calculate cheksum. So accepts uncompressed data
+/// reader, and provides reader for downstream deflate compressor.
+fn Envelope(comptime ReaderType: type, comptime WriterType: type, comptime kind: EnvelopeKind) type {
     const HasherType = if (kind == .gzip)
         std.hash.Crc32
     else
@@ -575,6 +564,7 @@ pub fn Envelope(comptime ReaderType: type, comptime kind: EnvelopeKind) type {
 
     return struct {
         rdr: ReaderType,
+        wrt: WriterType,
         bytes: usize = 0,
         hasher: HasherType = HasherType.init(),
 
@@ -599,41 +589,93 @@ pub fn Envelope(comptime ReaderType: type, comptime kind: EnvelopeKind) type {
         }
 
         pub fn bytesRead(self: *Self) u32 {
-            return @intCast(self.bytes);
+            return @truncate(self.bytes);
         }
 
-        pub fn header(self: *Self, wrt: anytype) !void {
-            _ = self;
+        /// Writes protocol header to provided writer.
+        pub fn header(self: *Self) !void {
             switch (kind) {
                 .gzip => {
-                    const gzipHeader = [_]u8{ 0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
-                    try wrt.writeAll(&gzipHeader);
+                    // GZIP 10 byte header (https://datatracker.ietf.org/doc/html/rfc1952#page-5):
+                    //  - ID1 (IDentification 1), always 0x1f
+                    //  - ID2 (IDentification 2), always 0x8b
+                    //  - CM (Compression Method), always 8 = deflate
+                    //  - FLG (Flags), all set to 0
+                    //  - 4 bytes, MTIME (Modification time), not used, all set to zero
+                    //  - XFL (eXtra FLags), all set to zero
+                    //  - OS (Operating System), 03 = Unix
+                    const gzipHeader = [_]u8{ 0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03 };
+                    try self.wrt.writeAll(&gzipHeader);
                 },
                 .zlib => {
-                    // TODO: ref https://github.com/golang/go/blob/8db131082d08e497fd8e9383d0ff7715e1bef478/src/compress/zlib/writer.go#L93
+                    // ZLIB has a two-byte header (https://datatracker.ietf.org/doc/html/rfc1950#page-4):
+                    // 1st byte:
+                    //  - First four bits is the CINFO (compression info), which is 7 for the default deflate window size.
+                    //  - The next four bits is the CM (compression method), which is 8 for deflate.
+                    // 2nd byte:
+                    //  - Two bits is the FLEVEL (compression level). Values are: 0=fastest, 1=fast, 2=default, 3=best.
+                    //  - The next bit, FDICT, is set if a dictionary is given.
+                    //  - The final five FCHECK bits form a mod-31 checksum.
+                    //
+                    // CINFO = 7, CM = 8, FLEVEL = 0b10, FDICT = 0, FCHECK = 0b11100
+                    const zlibHeader = [_]u8{ 0x78, 0b10_0_11100 };
+                    try self.wrt.writeAll(&zlibHeader);
                 },
             }
         }
 
-        pub fn footer(self: *Self, wrt: anytype) !void {
+        /// Writes protocol footer to provided writer.
+        pub fn footer(self: *Self) !void {
             var bits: [4]u8 = undefined;
             switch (kind) {
                 .gzip => {
+                    // GZIP 8 bytes footer
+                    //  - 4 bytes, CRC32 (CRC-32)
+                    //  - 4 bytes, ISIZE (Input SIZE) - size of the original (uncompressed) input data modulo 2^32
                     std.mem.writeInt(u32, &bits, self.chksum(), .little);
-                    try wrt.writeAll(&bits);
+                    try self.wrt.writeAll(&bits);
 
                     std.mem.writeInt(u32, &bits, self.bytesRead(), .little);
-                    try wrt.writeAll(&bits);
+                    try self.wrt.writeAll(&bits);
                 },
                 .zlib => {
-                    std.mem.writeInt(u32, &bits, self.chksum(), .bit);
-                    try wrt.writeAll(&bits);
+                    // ZLIB (RFC 1950) is big-endian, unlike GZIP (RFC 1952).
+                    // 4 bytes of ADLER32 (Adler-32 checksum)
+                    // Checksum value of the uncompressed data (excluding any
+                    // dictionary data) computed according to Adler-32
+                    // algorithm.
+                    std.mem.writeInt(u32, &bits, self.chksum(), .big);
+                    try self.wrt.writeAll(&bits);
                 },
             }
         }
     };
 }
 
-pub fn envelope(reader: anytype, comptime kind: EnvelopeKind) Envelope(@TypeOf(reader), kind) {
-    return .{ .rdr = reader };
+test "zlib header calculation" {
+    var h = [_]u8{ 0x78, 0b10_0_00000 };
+    h[1] += 31 - @as(u8, @intCast(std.mem.readInt(u16, h[0..2], .big) % 31));
+    try expect(h[1] == 0b10_0_11100);
+    // print("{x} {x} {b}\n", .{ h[0], h[1], h[1] });
+}
+
+pub fn tokenWriter(writer: anytype) TokenWriter(@TypeOf(writer)) {
+    return TokenWriter(@TypeOf(writer)).init(writer);
+}
+
+fn TokenWriter(comptime WriterType: type) type {
+    return struct {
+        hw_bw: hbw.HuffmanBitWriter(WriterType),
+
+        const Self = @This();
+
+        pub fn init(writer: WriterType) Self {
+            return .{ .hw_bw = hbw.huffmanBitWriter(writer) };
+        }
+
+        pub fn write(self: *Self, tokens: []const Token, final: bool) !void {
+            try self.hw_bw.writeBlock(tokens, final, null);
+            if (final) try self.hw_bw.flush();
+        }
+    };
 }
