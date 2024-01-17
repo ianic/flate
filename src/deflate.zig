@@ -183,18 +183,6 @@ const TestTokenWriter = struct {
     pub fn flush(_: *Self) !void {}
 };
 
-fn matchLength(src: []const u8, prev: usize, pos: usize) u16 {
-    assert(prev < pos);
-    assert(src.len > pos);
-
-    var n: u16 = 0;
-    for (src[prev .. prev + src.len - pos], src[pos..src.len]) |a, b| {
-        if (a != b) return n;
-        n += 1;
-    }
-    return n;
-}
-
 const StreamWindow = struct {
     const hist_len = consts.window.size;
     const buffer_len = 2 * hist_len;
@@ -459,55 +447,45 @@ test "deflate compress file to stdout" {
     const file_name = "testdata/2600.txt.utf-8";
     var file = try std.fs.cwd().openFile(file_name, .{});
     defer file.close();
-    var br = std.io.bufferedReader(file.reader());
-    var rdr = br.reader();
 
-    var stw: StdoutTokenWriter = .{};
-    var df = deflateWriter(&stw);
+    const wrt = std.io.getStdOut().writer();
 
-    var buf: [4096]u8 = undefined;
-    while (true) {
-        const n = try rdr.readAll(&buf);
-        _ = try df.write(buf[0..n]);
-        if (n < buf.len) break;
-    }
+    const tw: TokenDecoder(@TypeOf(wrt)) = .{ .wrt = wrt };
+    var df = Deflate(@TypeOf(tw)).init(tw);
+    try df.compress(file.reader());
     try df.close();
 }
 
-const SlidingWindow = @import("sliding_window.zig").SlidingWindow;
+fn TokenDecoder(comptime WriterType: type) type {
+    return struct {
+        const SlidingWindow = @import("sliding_window.zig").SlidingWindow;
+        win: SlidingWindow = .{},
+        wrt: WriterType,
+        const Self = @This();
 
-const StdoutTokenWriter = struct {
-    win: SlidingWindow = .{},
-
-    pub fn write(self: *StdoutTokenWriter, tokens: []const Token) !void {
-        const stdout = std.io.getStdOut();
-
-        for (tokens) |t| {
-            switch (t.kind) {
-                .literal => self.win.write(t.symbol()),
-                .match => self.win.writeCopy(t.length(), t.distance()),
-                else => unreachable,
-            }
-            if (self.win.free() < 285) {
-                while (true) {
-                    const buf = self.win.read();
-                    if (buf.len == 0) break;
-                    try stdout.writeAll(buf);
+        pub fn writeBlock(self: *Self, tokens: []const Token, _: bool, _: ?[]const u8) !void {
+            for (tokens) |t| {
+                switch (t.kind) {
+                    .literal => self.win.write(t.literal()),
+                    // TODO: kako sada ovo zbrajanje
+                    .match => self.win.writeCopy(@as(u16, t.length()) + 3, t.offset() + 1),
                 }
+                if (self.win.free() < 285) try self.flushWin();
+            }
+            try self.flushWin();
+        }
+
+        fn flushWin(self: *Self) !void {
+            while (true) {
+                const buf = self.win.read();
+                if (buf.len == 0) break;
+                try self.wrt.writeAll(buf);
             }
         }
 
-        while (true) {
-            const buf = self.win.read();
-            if (buf.len == 0) break;
-            try stdout.writeAll(buf);
-        }
-    }
-
-    pub fn close(self: *StdoutTokenWriter) !void {
-        _ = self;
-    }
-};
+        pub fn flush(_: *Self) !void {}
+    };
+}
 
 test "deflate compress file" {
     const input_file_name = "testdata/2600.txt.utf-8";
