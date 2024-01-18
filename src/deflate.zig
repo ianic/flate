@@ -64,7 +64,7 @@ pub fn Deflate(comptime WriterType: type) type {
 
         // Process data in window and create tokens.
         // If token buffer is full flush tokens to the token writer.
-        fn processWindow0(self: *Self, opt: ProcessOption) !void {
+        fn processWindowGreedy(self: *Self, opt: ProcessOption) !void {
             const min_lookahead: usize = if (opt == .none) consts.match.max_length else 0;
 
             while (self.nextToken(min_lookahead)) |token| {
@@ -75,41 +75,45 @@ pub fn Deflate(comptime WriterType: type) type {
             if (opt != .none) try self.flushTokens(opt == .final);
         }
 
+        // Process data in window and create tokens. If token buffer is full
+        // flush tokens to the token writer. In the case of `flush` or `final`
+        // option it will process all data from the window. In the `none` case
+        // it will preserve some data for the next match.
         fn processWindow(self: *Self, opt: ProcessOption) !void {
-            var lh = self.win.lookahead();
-            const lh_preserve: usize = if (opt == .none) consts.match.max_length else 0;
-            if (lh.len <= lh_preserve) return;
-
-            var pos: usize = self.win.pos();
-            const tail: usize = pos + lh.len - lh_preserve;
+            // flush - process all data from window
+            const flsh = (opt != .none);
 
             var match: ?Token = null;
             var literal: ?u8 = null;
 
-            while (pos < tail) {
-                var len: usize = 1;
+            // While there is data in active lookahead buffer.
+            while (self.win.activeLookahead(flsh)) |lh| {
+                var step: usize = 1; // 1 in the case of literal, match length otherwise
+                const pos: usize = self.win.pos();
                 const min_len: u16 = if (match) |m| @as(u16, m.length()) + 3 else 4;
+
+                // Try to find match at leat min_len long.
                 if (self.findMatch(pos, lh, min_len)) |token| {
-                    // found better match than previous
+                    // Found better match than previous.
+                    // Write previous literal (if any) and store this match.
                     _ = try self.addMatchOrLiteral(null, literal);
                     literal = lh[0];
                     match = token;
                 } else {
-                    // there is no better match at current pos the it was previous
-                    len = try self.addMatchOrLiteral(match, literal);
+                    // There is no better match at current pos the it was previous.
+                    // Write previous match or literal.
+                    // If there is no previous match we are advancing 1 step so remember this literal.
+                    step = try self.addMatchOrLiteral(match, literal);
                     literal = if (match == null) lh[0] else null;
                     match = null;
                 }
-
-                self.hasher.bulkAdd(lh[1..], len - 1, @intCast(pos + 1));
-                self.win.advance(len);
-                pos += len;
-                lh = lh[len..];
+                // Advance window and add hashes.
+                self.hasher.bulkAdd(lh[1..], step - 1, @intCast(pos + 1));
+                self.win.advance(step);
             }
-
             _ = try self.addMatchOrLiteral(match, literal);
 
-            if (opt != .none) try self.flushTokens(opt == .final);
+            if (flsh) try self.flushTokens(opt == .final);
         }
 
         inline fn addMatchOrLiteral(self: *Self, match: ?Token, literal: ?u8) !usize {
@@ -296,19 +300,22 @@ const StreamWindow = struct {
         return 0;
     }
 
-    pub fn lookahead(self: *StreamWindow) []const u8 {
-        assert(self.wp >= self.rp);
-        return self.buffer[self.rp..self.wp];
-    }
-
-    pub fn lookahead2(self: *StreamWindow, preserve: usize) ?[]const u8 {
-        assert(self.wp >= self.rp);
-        const buf = self.buffer[self.rp..self.wp];
-        return if (buf.len > preserve) buf else null;
+    // flush - process all data from window
+    // If not flush preserve enough data to for the loghest match.
+    // Returns null if there is not enough data.
+    pub fn activeLookahead(self: *StreamWindow, flush: bool) ?[]const u8 {
+        const preserve: usize = if (flush) 0 else consts.match.max_length;
+        const lh = self.lookahead();
+        return if (lh.len > preserve) lh else null;
     }
 
     pub fn history(self: *StreamWindow) []const u8 {
         return self.buffer[0..self.rp];
+    }
+
+    pub inline fn lookahead(self: *StreamWindow) []const u8 {
+        assert(self.wp >= self.rp);
+        return self.buffer[self.rp..self.wp];
     }
 
     pub fn writable(self: *StreamWindow) []u8 {
