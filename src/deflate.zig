@@ -90,7 +90,7 @@ pub fn Deflate(comptime WriterType: type) type {
             while (self.win.activeLookahead(flsh)) |lh| {
                 var step: usize = 1; // 1 in the case of literal, match length otherwise
                 const pos: usize = self.win.pos();
-                const min_len: u16 = if (match) |m| @as(u16, m.length()) + 3 else 4;
+                const min_len: u16 = if (match) |m| m.length() else 4;
 
                 // Try to find match at leat min_len long.
                 if (self.findMatch(pos, lh, min_len)) |token| {
@@ -117,10 +117,9 @@ pub fn Deflate(comptime WriterType: type) type {
         }
 
         inline fn addMatchOrLiteral(self: *Self, match: ?Token, literal: ?u8) !usize {
-            if (match) |m| { // last resutl exists
+            if (match) |m| {
                 try self.addToken(m);
-                const len: u16 = @as(u16, m.length()) + 3 - 1; // TODO
-                return len;
+                return m.length() - 1;
             }
             if (literal) |l| {
                 try self.addToken(Token.initLiteral(l));
@@ -558,8 +557,7 @@ fn TokenDecoder(comptime WriterType: type) type {
             for (tokens) |t| {
                 switch (t.kind) {
                     .literal => self.win.write(t.literal()),
-                    // TODO: kako sada ovo zbrajanje
-                    .match => self.win.writeCopy(@as(u16, t.length()) + 3, t.offset() + 1),
+                    .match => self.win.writeCopy(t.length(), t.offset()),
                 }
                 if (self.win.free() < 285) try self.flushWin();
             }

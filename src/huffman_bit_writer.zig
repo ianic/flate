@@ -5,9 +5,6 @@ const consts = @import("consts.zig");
 const hc = @import("huffman_code.zig");
 const Token = @import("Token.zig");
 
-// The first length code.
-const length_codes_start = 257;
-
 // The number of codegen codes.
 const codegen_code_count = 19;
 const bad_code = 255;
@@ -22,37 +19,6 @@ const buffer_flush_size = 240;
 // It must have additional headroom for a flush
 // which can contain up to 8 bytes.
 const buffer_size = buffer_flush_size + 8;
-
-// The number of extra bits needed by length code X - LENGTH_CODES_START.
-const length_extra_bits = [_]u8{
-    0, 0, 0, // 257
-    0, 0, 0, 0, 0, 1, 1, 1, 1, 2, // 260
-    2, 2, 2, 3, 3, 3, 3, 4, 4, 4, // 270
-    4, 5, 5, 5, 5, 0, // 280
-};
-
-// The length indicated by length code X - LENGTH_CODES_START.
-const length_base = [_]u8{
-    0,  1,  2,  3,   4,   5,   6,   7,   8,   10,
-    12, 14, 16, 20,  24,  28,  32,  40,  48,  56,
-    64, 80, 96, 112, 128, 160, 192, 224, 255,
-};
-
-// offset code word extra bits.
-const offset_extra_bits = [_]u8{
-    0, 0, 0,  0,  1,  1,  2,  2,  3,  3,
-    4, 4, 5,  5,  6,  6,  7,  7,  8,  8,
-    9, 9, 10, 10, 11, 11, 12, 12, 13, 13,
-};
-
-const offset_base = [_]u16{
-    0x0000, 0x0001, 0x0002, 0x0003, 0x0004,
-    0x0006, 0x0008, 0x000c, 0x0010, 0x0018,
-    0x0020, 0x0030, 0x0040, 0x0060, 0x0080,
-    0x00c0, 0x0100, 0x0180, 0x0200, 0x0300,
-    0x0400, 0x0600, 0x0800, 0x0c00, 0x1000,
-    0x1800, 0x2000, 0x3000, 0x4000, 0x6000,
-};
 
 // The odd order in which the codegen code sizes are written.
 var codegen_order = [_]u32{ 16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15 };
@@ -432,17 +398,17 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
                 // the length of offset fields (which will be the same for both fixed
                 // and dynamic encoding), if we need to compare those two encodings
                 // against stored encoding.
-                var length_code: u32 = length_codes_start + 8;
+                var length_code: u16 = Token.length_codes_start + 8;
                 while (length_code < num_literals) : (length_code += 1) {
                     // First eight length codes have extra size = 0.
                     extra_bits += @as(u32, @intCast(self.literal_freq[length_code])) *
-                        @as(u32, @intCast(length_extra_bits[length_code - length_codes_start]));
+                        @as(u32, @intCast(Token.lengthExtraBits(length_code)));
                 }
-                var offset_code: u32 = 4;
+                var offset_code: u16 = 4;
                 while (offset_code < num_offsets) : (offset_code += 1) {
                     // First four offset codes have extra size = 0.
                     extra_bits += @as(u32, @intCast(self.offset_freq[offset_code])) *
-                        @as(u32, @intCast(offset_extra_bits[offset_code]));
+                        @as(u32, @intCast(Token.offsetExtraBits(offset_code)));
                 }
             }
 
@@ -570,7 +536,7 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
                     self.literal_freq[t.literal()] += 1;
                     continue;
                 }
-                self.literal_freq[length_codes_start + t.lengthCode()] += 1;
+                self.literal_freq[t.lengthCode()] += 1;
                 self.offset_freq[t.offsetCode()] += 1;
             }
             // add end_block_marker token at the end
@@ -613,23 +579,19 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
                     try self.writeCode(le_codes[t.literal()]);
                     continue;
                 }
+
                 // Write the length
-                const length = t.length();
-                const length_code = t.lengthCode();
-                try self.writeCode(le_codes[length_code + length_codes_start]);
-                const extra_length_bits: u8 = length_extra_bits[length_code];
-                if (extra_length_bits > 0) {
-                    const extra_length: u8 = length - length_base[length_code];
-                    try self.writeBits(extra_length, extra_length_bits);
+                const le = t.lengthEncoding();
+                try self.writeCode(le_codes[le.code]);
+                if (le.extra_bits > 0) {
+                    try self.writeBits(le.extra_length, le.extra_bits);
                 }
+
                 // Write the offset
-                const offset = t.offset();
-                const offset_code = t.offsetCode();
-                try self.writeCode(oe_codes[offset_code]);
-                const extra_offset_bits: u8 = offset_extra_bits[offset_code];
-                if (extra_offset_bits > 0) {
-                    const extra_offset: u16 = offset - offset_base[offset_code];
-                    try self.writeBits(extra_offset, extra_offset_bits);
+                const oe = t.offsetEncoding();
+                try self.writeCode(oe_codes[oe.code]);
+                if (oe.extra_bits > 0) {
+                    try self.writeBits(oe.extra_offset, oe.extra_bits);
                 }
             }
             // add end_block_marker at the end
@@ -746,8 +708,8 @@ pub fn huffmanBitWriter(writer: anytype) HuffmanBitWriter(@TypeOf(writer)) {
         .bits = 0,
         .nbits = 0,
         .nbytes = 0,
-        .bytes = undefined, //[1]u8{0} ** buffer_size,
-        .codegen_freq = undefined, // [1]u16{0} ** codegen_code_count,
+        .bytes = undefined,
+        .codegen_freq = undefined,
         .literal_freq = undefined,
         .offset_freq = undefined,
         .codegen = undefined,
