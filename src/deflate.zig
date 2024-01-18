@@ -64,7 +64,7 @@ pub fn Deflate(comptime WriterType: type) type {
 
         // Process data in window and create tokens.
         // If token buffer is full flush tokens to the token writer.
-        fn processWindow(self: *Self, opt: ProcessOption) !void {
+        fn processWindow0(self: *Self, opt: ProcessOption) !void {
             const min_lookahead: usize = if (opt == .none) consts.match.max_length else 0;
 
             while (self.nextToken(min_lookahead)) |token| {
@@ -73,6 +73,101 @@ pub fn Deflate(comptime WriterType: type) type {
             }
 
             if (opt != .none) try self.flushTokens(opt == .final);
+        }
+
+        fn processWindow(self: *Self, opt: ProcessOption) !void {
+            var lh = self.win.lookahead();
+            const lh_preserve: usize = if (opt == .none) consts.match.max_length else 0;
+            if (lh.len <= lh_preserve) return;
+
+            var pos: usize = self.win.pos();
+            const tail: usize = pos + lh.len - lh_preserve;
+
+            var last_match: ?Token = null;
+            var last_literal: ?Token = null;
+
+            while (pos < tail) {
+                const min_len: u16 = if (last_match) |m| @as(u16, m.length()) + 3 else 4;
+                if (self.findMatch(pos, lh, min_len)) |token| {
+                    if (last_literal) |ll| {
+                        //print("l", .{});
+                        self.tokens.add(ll);
+                        if (self.tokens.full()) try self.flushTokens(false);
+                    }
+                    //print("+", .{});
+                    last_literal = Token.initLiteral(lh[0]);
+                    last_match = token;
+                } else { // there is no better match
+                    if (last_match) |lm| { // last resutl exists
+                        self.tokens.add(lm);
+                        if (self.tokens.full()) try self.flushTokens(false);
+
+                        const len: u16 = @as(u16, lm.length()) + 3 - 1; // TODO
+                        self.hasher.bulkAdd(lh[1..], len - 1, @intCast(pos + 1));
+
+                        pos += len;
+                        lh = lh[len..];
+                        self.win.advance(len);
+
+                        last_match = null;
+                        last_literal = null;
+                        //print("m", .{});
+                        continue;
+                    }
+                    if (last_literal) |ll| {
+                        //print(".", .{});
+                        self.tokens.add(ll);
+                        if (self.tokens.full()) try self.flushTokens(false);
+                    }
+                    last_literal = Token.initLiteral(lh[0]);
+                }
+                pos += 1;
+                lh = lh[1..];
+                self.win.advance(1);
+            }
+            //assert(last_match == null);
+            if (last_match) |lm| { // last resutl exists
+                self.tokens.add(lm);
+                if (self.tokens.full()) try self.flushTokens(false);
+
+                const len: u16 = @as(u16, lm.length()) + 3 - 1; // TODO
+                self.hasher.bulkAdd(lh[1..], len - 1, @intCast(pos + 1));
+
+                self.win.advance(len);
+
+                last_match = null;
+                last_literal = null;
+            }
+            if (last_literal) |ll| {
+                self.tokens.add(ll);
+                if (self.tokens.full()) try self.flushTokens(false);
+            }
+
+            if (opt != .none) try self.flushTokens(opt == .final);
+        }
+
+
+        fn findMatch(self: *Self, pos: usize, lh: []const u8, min_len: u16) ?Token {
+            var length: usize = min_len;
+
+            var match_pos = self.hasher.add(lh, @intCast(pos)); // TODO: rethink intCast
+
+            var token: ?Token = null;
+
+            var tries: usize = 256; // TODO: this is just hack
+            while (match_pos != Hasher.not_found and tries > 0) : (tries -= 1) {
+                const distance = pos - match_pos;
+                if (distance > consts.match.max_distance or
+                    match_pos < self.win.offset) break;
+                const match_length = self.win.match(match_pos, pos);
+                if (match_length > length) {
+                    token = Token.initMatch(@intCast(distance), match_length);
+                    length = match_length;
+                }
+                match_pos = self.hasher.prev(match_pos);
+            }
+
+            return token;
         }
 
         fn flushTokens(self: *Self, final: bool) !void {
@@ -487,7 +582,7 @@ fn TokenDecoder(comptime WriterType: type) type {
     };
 }
 
-test "deflate compress file" {
+test "gzip compress file" {
     const input_file_name = "testdata/2600.txt.utf-8";
     var input = try std.fs.cwd().openFile(input_file_name, .{});
     defer input.close();
