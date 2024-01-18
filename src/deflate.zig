@@ -83,69 +83,51 @@ pub fn Deflate(comptime WriterType: type) type {
             var pos: usize = self.win.pos();
             const tail: usize = pos + lh.len - lh_preserve;
 
-            var last_match: ?Token = null;
-            var last_literal: ?Token = null;
+            var match: ?Token = null;
+            var literal: ?u8 = null;
 
             while (pos < tail) {
-                const min_len: u16 = if (last_match) |m| @as(u16, m.length()) + 3 else 4;
+                var len: usize = 1;
+                const min_len: u16 = if (match) |m| @as(u16, m.length()) + 3 else 4;
                 if (self.findMatch(pos, lh, min_len)) |token| {
-                    if (last_literal) |ll| {
-                        //print("l", .{});
-                        self.tokens.add(ll);
-                        if (self.tokens.full()) try self.flushTokens(false);
-                    }
-                    //print("+", .{});
-                    last_literal = Token.initLiteral(lh[0]);
-                    last_match = token;
-                } else { // there is no better match
-                    if (last_match) |lm| { // last resutl exists
-                        self.tokens.add(lm);
-                        if (self.tokens.full()) try self.flushTokens(false);
-
-                        const len: u16 = @as(u16, lm.length()) + 3 - 1; // TODO
-                        self.hasher.bulkAdd(lh[1..], len - 1, @intCast(pos + 1));
-
-                        pos += len;
-                        lh = lh[len..];
-                        self.win.advance(len);
-
-                        last_match = null;
-                        last_literal = null;
-                        //print("m", .{});
-                        continue;
-                    }
-                    if (last_literal) |ll| {
-                        //print(".", .{});
-                        self.tokens.add(ll);
-                        if (self.tokens.full()) try self.flushTokens(false);
-                    }
-                    last_literal = Token.initLiteral(lh[0]);
+                    // found better match than previous
+                    _ = try self.addMatchOrLiteral(null, literal);
+                    literal = lh[0];
+                    match = token;
+                } else {
+                    // there is no better match at current pos the it was previous
+                    len = try self.addMatchOrLiteral(match, literal);
+                    literal = if (match == null) lh[0] else null;
+                    match = null;
                 }
-                pos += 1;
-                lh = lh[1..];
-                self.win.advance(1);
-            }
-            //assert(last_match == null);
-            if (last_match) |lm| { // last resutl exists
-                self.tokens.add(lm);
-                if (self.tokens.full()) try self.flushTokens(false);
 
-                const len: u16 = @as(u16, lm.length()) + 3 - 1; // TODO
                 self.hasher.bulkAdd(lh[1..], len - 1, @intCast(pos + 1));
-
                 self.win.advance(len);
+                pos += len;
+                lh = lh[len..];
+            }
 
-                last_match = null;
-                last_literal = null;
-            }
-            if (last_literal) |ll| {
-                self.tokens.add(ll);
-                if (self.tokens.full()) try self.flushTokens(false);
-            }
+            _ = try self.addMatchOrLiteral(match, literal);
 
             if (opt != .none) try self.flushTokens(opt == .final);
         }
 
+        inline fn addMatchOrLiteral(self: *Self, match: ?Token, literal: ?u8) !usize {
+            if (match) |m| { // last resutl exists
+                try self.addToken(m);
+                const len: u16 = @as(u16, m.length()) + 3 - 1; // TODO
+                return len;
+            }
+            if (literal) |l| {
+                try self.addToken(Token.initLiteral(l));
+            }
+            return 1;
+        }
+
+        inline fn addToken(self: *Self, token: Token) !void {
+            self.tokens.add(token);
+            if (self.tokens.full()) try self.flushTokens(false);
+        }
 
         fn findMatch(self: *Self, pos: usize, lh: []const u8, min_len: u16) ?Token {
             var length: usize = min_len;
@@ -319,6 +301,12 @@ const StreamWindow = struct {
         return self.buffer[self.rp..self.wp];
     }
 
+    pub fn lookahead2(self: *StreamWindow, preserve: usize) ?[]const u8 {
+        assert(self.wp >= self.rp);
+        const buf = self.buffer[self.rp..self.wp];
+        return if (buf.len > preserve) buf else null;
+    }
+
     pub fn history(self: *StreamWindow) []const u8 {
         return self.buffer[0..self.rp];
     }
@@ -429,6 +417,7 @@ const Hasher = struct {
     }
 
     fn bulkAdd(self: *Hasher, data: []const u8, len: usize, idx: u32) void {
+        if (len == 0) return;
         // TOOD: use bulk alg from below
         var i: u32 = idx;
         for (0..len) |j| {
