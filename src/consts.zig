@@ -1,5 +1,8 @@
 pub const block = struct {
-    pub const tokens = 1 << 14;
+    // in zlib this depends on memlevel
+    // 6 + memlevel, where default memlevel is 8 and max 9
+    // that gives 14 or 15 bits
+    pub const tokens = 1 << 15;
 };
 
 pub const match = struct {
