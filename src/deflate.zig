@@ -18,62 +18,39 @@ pub fn deflate(reader: anytype, writer: anytype) !void {
     try df.close();
 }
 
+const Compression = enum {
+    default,
+    best,
+};
+
+const Level = struct {
+    good: u16,
+    nice: u16,
+    lazy: u16,
+    chain: u16,
+};
+
 pub fn Deflate(comptime WriterType: type) type {
+    const compression: Compression = .default;
+    const level: Level = switch (compression) {
+        .default => .{ .good = 8, .lazy = 16, .nice = 128, .chain = 128 },
+        .best => .{ .good = 32, .lazy = 258, .nice = 258, .chain = 4096 },
+    };
     return struct {
         hasher: Hasher = .{},
         win: StreamWindow = .{},
         tokens: Tokens = .{},
         token_writer: WriterType,
 
+        prev_match: ?Token = null,
+        prev_literal: ?u8 = null,
+
         const Self = @This();
         pub fn init(w: WriterType) Self {
             return .{ .token_writer = w };
         }
 
-        fn nextToken(self: *Self, min_lookahead: usize) ?Token {
-            const lh = self.win.lookahead();
-            if (lh.len <= min_lookahead) return null;
-
-            var token = Token.initLiteral(lh[0]);
-            var length: usize = 1;
-
-            const curr_pos = self.win.pos();
-            var match_pos = self.hasher.add(lh, @intCast(curr_pos)); // TODO: rethink intCast
-
-            var tries: usize = 128; // TODO: this is just hack
-            while (match_pos != Hasher.not_found and tries > 0) : (tries -= 1) {
-                const distance = curr_pos - match_pos;
-                if (distance > consts.match.max_distance or
-                    match_pos < self.win.offset) break;
-                const match_length = self.win.match(match_pos, curr_pos);
-                if (match_length > length) {
-                    token = Token.initMatch(@intCast(distance), match_length);
-                    length = match_length;
-                }
-                match_pos = self.hasher.prev(match_pos);
-            }
-
-            self.win.advance(length);
-            if (length > 1)
-                self.hasher.bulkAdd(lh[1..], length - 1, @intCast(curr_pos + 1));
-
-            return token;
-        }
-
         const ProcessOption = enum { none, flush, final };
-
-        // Process data in window and create tokens.
-        // If token buffer is full flush tokens to the token writer.
-        fn processWindowGreedy(self: *Self, opt: ProcessOption) !void {
-            const min_lookahead: usize = if (opt == .none) consts.match.max_length else 0;
-
-            while (self.nextToken(min_lookahead)) |token| {
-                self.tokens.add(token);
-                if (self.tokens.full()) try self.flushTokens(false);
-            }
-
-            if (opt != .none) try self.flushTokens(opt == .final);
-        }
 
         // Process data in window and create tokens. If token buffer is full
         // flush tokens to the token writer. In the case of `flush` or `final`
@@ -83,8 +60,8 @@ pub fn Deflate(comptime WriterType: type) type {
             // flush - process all data from window
             const flsh = (opt != .none);
 
-            var match: ?Token = null;
-            var literal: ?u8 = null;
+            var match: ?Token = self.prev_match;
+            var literal: ?u8 = self.prev_literal;
 
             // While there is data in active lookahead buffer.
             while (self.win.activeLookahead(flsh)) |lh| {
@@ -92,13 +69,21 @@ pub fn Deflate(comptime WriterType: type) type {
                 const pos: usize = self.win.pos();
                 const min_len: u16 = if (match) |m| m.length() else 4;
 
-                // Try to find match at leat min_len long.
+                // Try to find match at least min_len long.
                 if (self.findMatch(pos, lh, min_len)) |token| {
                     // Found better match than previous.
                     // Write previous literal (if any) and store this match.
                     _ = try self.addMatchOrLiteral(null, literal);
-                    literal = lh[0];
-                    match = token;
+
+                    if (false or token.length() >= level.lazy) {
+                        // Don't try to lazy find better match, use this.
+                        step = try self.addMatchOrLiteral(token, null) + 1;
+                        literal = null;
+                        match = null;
+                    } else {
+                        literal = lh[0];
+                        match = token;
+                    }
                 } else {
                     // There is no better match at current pos the it was previous.
                     // Write previous match or literal.
@@ -111,7 +96,16 @@ pub fn Deflate(comptime WriterType: type) type {
                 self.hasher.bulkAdd(lh[1..], step - 1, @intCast(pos + 1));
                 self.win.advance(step);
             }
-            _ = try self.addMatchOrLiteral(match, literal);
+
+            if (flsh) {
+                // In the case of flushing, last few lookahead buffers were smaller then min match len.
+                // So only last literal can be unwritten.
+                assert(match == null);
+                _ = try self.addMatchOrLiteral(null, literal);
+                literal = null;
+            }
+            self.prev_literal = literal;
+            self.prev_match = match;
 
             if (flsh) try self.flushTokens(opt == .final);
         }
@@ -139,7 +133,11 @@ pub fn Deflate(comptime WriterType: type) type {
 
             var token: ?Token = null;
 
-            var tries: usize = 256; // TODO: this is just hack
+            var tries: usize = level.chain;
+            if (min_len >= level.good) {
+                // If we've got a match that's good enough, only look in 1/4 the chain.
+                tries >>= 2;
+            }
             while (match_pos != Hasher.not_found and tries > 0) : (tries -= 1) {
                 const distance = pos - match_pos;
                 if (distance > consts.match.max_distance or
@@ -147,6 +145,10 @@ pub fn Deflate(comptime WriterType: type) type {
                 const match_length = self.win.match(match_pos, pos);
                 if (match_length > length) {
                     token = Token.initMatch(@intCast(distance), match_length);
+                    if (length >= level.nice) {
+                        // The match is good enough that we don't try to find a better one.
+                        return token;
+                    }
                     length = match_length;
                 }
                 match_pos = self.hasher.prev(match_pos);
@@ -487,14 +489,12 @@ test "Hasher add/prev" {
 }
 
 test "Token size" {
-    // TODO: remove this
-    // print("size of Tokens {d}, bit_offset: {d} {d} {d}\n", .{
+    // // TODO: remove this
+    // print("size of Tokens {d}\n", .{
     //     @sizeOf(Tokens),
-    //     @bitOffsetOf(Token, "kind"),
-    //     @bitOffsetOf(Token, "lc_sym"),
-    //     @bitOffsetOf(Token, "dc"),
     // });
     try expect(@sizeOf(Token) == 4);
+    try expect(@sizeOf(Tokens) == 131_080);
     //try expect(@bitSizeOf(Token) == 26);
     // print("size of Hasher {d}\n", .{@sizeOf(Hasher)});
     try expect(@sizeOf(Hasher) == 655_360);
