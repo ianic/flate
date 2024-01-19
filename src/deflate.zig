@@ -72,15 +72,18 @@ pub fn Deflate(comptime WriterType: type) type {
                 // Try to find match at least min_len long.
                 if (self.findMatch(pos, lh, min_len)) |token| {
                     // Found better match than previous.
-                    // Write previous literal (if any) and store this match.
-                    _ = try self.addMatchOrLiteral(null, literal);
+                    // Write previous literal (if any).
+                    if (literal) |l| try self.addLiteral(l);
 
-                    if (false or token.length() >= level.lazy) {
+                    const tl = token.length();
+                    if (tl >= level.lazy) {
                         // Don't try to lazy find better match, use this.
-                        step = try self.addMatchOrLiteral(token, null) + 1;
+                        try self.addToken(token);
+                        step = tl;
                         literal = null;
                         match = null;
                     } else {
+                        // Store this match.
                         literal = lh[0];
                         match = token;
                     }
@@ -88,9 +91,18 @@ pub fn Deflate(comptime WriterType: type) type {
                     // There is no better match at current pos the it was previous.
                     // Write previous match or literal.
                     // If there is no previous match we are advancing 1 step so remember this literal.
-                    step = try self.addMatchOrLiteral(match, literal);
-                    literal = if (match == null) lh[0] else null;
-                    match = null;
+                    if (match) |m| {
+                        // Write match from previous position.
+                        try self.addToken(m);
+                        step = m.length() - 1;
+                        literal = null;
+                        match = null;
+                    } else {
+                        // No match at previous postition.
+                        // Write previous literal if any, and remember this literal.
+                        if (literal) |l| try self.addLiteral(l);
+                        literal = lh[0];
+                    }
                 }
                 // Advance window and add hashes.
                 self.hasher.bulkAdd(lh[1..], step - 1, @intCast(pos + 1));
@@ -101,7 +113,7 @@ pub fn Deflate(comptime WriterType: type) type {
                 // In the case of flushing, last few lookahead buffers were smaller then min match len.
                 // So only last literal can be unwritten.
                 assert(match == null);
-                _ = try self.addMatchOrLiteral(null, literal);
+                if (literal) |l| try self.addLiteral(l);
                 literal = null;
             }
             self.prev_literal = literal;
@@ -110,15 +122,8 @@ pub fn Deflate(comptime WriterType: type) type {
             if (flsh) try self.flushTokens(opt == .final);
         }
 
-        inline fn addMatchOrLiteral(self: *Self, match: ?Token, literal: ?u8) !usize {
-            if (match) |m| {
-                try self.addToken(m);
-                return m.length() - 1;
-            }
-            if (literal) |l| {
-                try self.addToken(Token.initLiteral(l));
-            }
-            return 1;
+        inline fn addLiteral(self: *Self, lit: u8) !void {
+            try self.addToken(Token.initLiteral(lit));
         }
 
         inline fn addToken(self: *Self, token: Token) !void {
