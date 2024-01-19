@@ -60,70 +60,78 @@ pub fn Deflate(comptime WriterType: type) type {
             // flush - process all data from window
             const flsh = (opt != .none);
 
-            var match: ?Token = self.prev_match;
-            var literal: ?u8 = self.prev_literal;
-
             // While there is data in active lookahead buffer.
             while (self.win.activeLookahead(flsh)) |lh| {
                 var step: usize = 1; // 1 in the case of literal, match length otherwise
                 const pos: usize = self.win.pos();
-                const min_len: u16 = if (match) |m| m.length() else 4;
+                const literal = lh[0]; // literal at current position
+                const min_len: u16 = if (self.prev_match) |m| m.length() else consts.match.min_length;
 
                 // Try to find match at least min_len long.
-                if (self.findMatch(pos, lh, min_len)) |token| {
+                if (self.findMatch(pos, lh, min_len)) |match| {
                     // Found better match than previous.
-                    // Write previous literal (if any).
-                    if (literal) |l| try self.addLiteral(l);
 
-                    const tl = token.length();
-                    if (tl >= level.lazy) {
+                    try self.addPrevLiteral();
+
+                    // Is found match length good enough?
+                    if (match.length() >= level.lazy) {
                         // Don't try to lazy find better match, use this.
-                        try self.addToken(token);
-                        step = tl;
-                        literal = null;
-                        match = null;
+                        step = try self.addMatch(match);
                     } else {
                         // Store this match.
-                        literal = lh[0];
-                        match = token;
+                        self.prev_literal = literal;
+                        self.prev_match = match;
                     }
                 } else {
-                    // There is no better match at current pos the it was previous.
+                    // There is no better match at current pos then it was previous.
                     // Write previous match or literal.
-                    // If there is no previous match we are advancing 1 step so remember this literal.
-                    if (match) |m| {
+                    if (self.prev_match) |m| {
                         // Write match from previous position.
-                        try self.addToken(m);
-                        step = m.length() - 1;
-                        literal = null;
-                        match = null;
+                        step = try self.addMatch(m) - 1; // we already advanced 1 from previous position
                     } else {
                         // No match at previous postition.
                         // Write previous literal if any, and remember this literal.
-                        if (literal) |l| try self.addLiteral(l);
-                        literal = lh[0];
+                        try self.addPrevLiteral();
+                        self.prev_literal = literal;
                     }
                 }
                 // Advance window and add hashes.
-                self.hasher.bulkAdd(lh[1..], step - 1, @intCast(pos + 1));
-                self.win.advance(step);
+                self.windowAdvance(step);
             }
 
             if (flsh) {
                 // In the case of flushing, last few lookahead buffers were smaller then min match len.
                 // So only last literal can be unwritten.
-                assert(match == null);
-                if (literal) |l| try self.addLiteral(l);
-                literal = null;
+                assert(self.prev_match == null);
+                try self.addPrevLiteral();
+                self.prev_literal = null;
             }
-            self.prev_literal = literal;
-            self.prev_match = match;
 
             if (flsh) try self.flushTokens(opt == .final);
         }
 
-        inline fn addLiteral(self: *Self, lit: u8) !void {
-            try self.addToken(Token.initLiteral(lit));
+        inline fn windowAdvance(self: *Self, step: usize) void {
+            // assuming current position is already added in findMatch
+            if (step > 1) {
+                const lh = self.win.lookahead();
+                const pos = self.win.pos();
+                self.hasher.bulkAdd(lh[1..], step - 1, @intCast(pos + 1));
+            }
+            self.win.advance(step);
+        }
+
+        // Add previous literal (if any) to the tokens list.
+        inline fn addPrevLiteral(self: *Self) !void {
+            if (self.prev_literal) |l| try self.addToken(Token.initLiteral(l));
+        }
+
+        // Add match to the tokens list, reset prev pointers.
+        // Returns length of the added match.
+        inline fn addMatch(self: *Self, m: Token) !u16 {
+            try self.addToken(m);
+            self.prev_literal = null;
+            self.prev_match = null;
+            return m.length();
         }
 
         inline fn addToken(self: *Self, token: Token) !void {
@@ -429,43 +437,34 @@ const Hasher = struct {
         }
     }
 
-    fn bulkAdd(self: *Hasher, data: []const u8, len: usize, idx: u32) void {
-        if (len == 0) return;
-        // TOOD: use bulk alg from below
-        var i: u32 = idx;
-        for (0..len) |j| {
-            const d = data[j..];
-            if (d.len < consts.match.min_length) return;
-            _ = self.add(d, i);
-            i += 1;
-        }
-    }
-
-    fn hash(b: *const [4]u8) u32 {
-        return (((@as(u32, b[3]) |
-            @as(u32, b[2]) << 8 |
-            @as(u32, b[1]) << 16 |
-            @as(u32, b[0]) << 24) *% mul) >> consts.hash.shift) & consts.hash.mask;
-    }
-
-    fn bulk(b: []u8, dst: []u32) u32 {
-        if (b.len < consts.match.min_length) {
-            return 0;
+    fn bulkAdd(self: *Hasher, b: []const u8, len: usize, idx: u32) void {
+        if (len == 0 or b.len < consts.match.min_length) {
+            return;
         }
         var hb =
             @as(u32, b[3]) |
             @as(u32, b[2]) << 8 |
             @as(u32, b[1]) << 16 |
             @as(u32, b[0]) << 24;
+        _ = self.set(hashu(hb), idx);
 
-        dst[0] = (hb *% mul) >> consts.hash.shift;
-        const end = b.len - consts.match.min_length + 1;
-        var i: u32 = 1;
-        while (i < end) : (i += 1) {
-            hb = (hb << 8) | @as(u32, b[i + 3]);
-            dst[i] = (hb *% mul) >> consts.hash.shift;
+        var i = idx;
+        for (4..@min(len + 3, b.len)) |j| {
+            hb = (hb << 8) | @as(u32, b[j]);
+            i += 1;
+            _ = self.set(hashu(hb), i);
         }
-        return hb;
+    }
+
+    inline fn hash(b: *const [4]u8) u32 {
+        return hashu(@as(u32, b[3]) |
+            @as(u32, b[2]) << 8 |
+            @as(u32, b[1]) << 16 |
+            @as(u32, b[0]) << 24);
+    }
+
+    inline fn hashu(v: u32) u32 {
+        return (v *% mul) >> consts.hash.shift;
     }
 };
 
@@ -491,6 +490,23 @@ test "Hasher add/prev" {
     try testing.expect(h.head[v] == 2 + 16);
     try testing.expect(h.chain[2 + 16] == 2 + 8);
     try testing.expect(h.chain[2 + 8] == 2);
+}
+
+test "Hasher bulkAdd" {
+    const data = "Lorem ipsum dolor sit amet, consectetur adipiscing elit.";
+
+    // one by one
+    var h: Hasher = .{};
+    for (data, 0..) |_, i| {
+        _ = h.add(data[i..], @intCast(i));
+    }
+
+    // in bulk
+    var bh: Hasher = .{};
+    bh.bulkAdd(data, data.len, 0);
+
+    try testing.expectEqualSlices(u32, &h.head, &bh.head);
+    try testing.expectEqualSlices(u32, &h.chain, &bh.chain);
 }
 
 test "Token size" {
