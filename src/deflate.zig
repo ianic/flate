@@ -24,10 +24,10 @@ const Compression = enum {
 };
 
 const Level = struct {
-    good: u16,
-    nice: u16,
-    lazy: u16,
-    chain: u16,
+    good: u16, // do less lookups if we already have match of this length
+    nice: u16, // stop looking for better match if we found match with at least this length
+    lazy: u16, // don't do lazy match find if got match with at least this length
+    chain: u16, // how many lookups for previous match to perform
 };
 
 pub fn Deflate(comptime WriterType: type) type {
@@ -37,11 +37,13 @@ pub fn Deflate(comptime WriterType: type) type {
         .best => .{ .good = 32, .lazy = 258, .nice = 258, .chain = 4096 },
     };
     return struct {
-        hasher: Hasher = .{},
+        lookup: Lookup = .{},
         win: StreamWindow = .{},
         tokens: Tokens = .{},
         token_writer: WriterType,
 
+        // Match and literal at the previous position.
+        // Used for lazy match finding in processWindow.
         prev_match: ?Token = null,
         prev_literal: ?u8 = null,
 
@@ -115,7 +117,7 @@ pub fn Deflate(comptime WriterType: type) type {
             if (step > 1) {
                 const lh = self.win.lookahead();
                 const pos = self.win.pos();
-                self.hasher.bulkAdd(lh[1..], step - 1, @intCast(pos + 1));
+                self.lookup.bulkAdd(lh[1..], step - 1, @intCast(pos + 1));
             }
             self.win.advance(step);
         }
@@ -142,7 +144,7 @@ pub fn Deflate(comptime WriterType: type) type {
         fn findMatch(self: *Self, pos: usize, lh: []const u8, min_len: u16) ?Token {
             var length: usize = min_len;
 
-            var match_pos = self.hasher.add(lh, @intCast(pos)); // TODO: rethink intCast
+            var match_pos = self.lookup.add(lh, @intCast(pos)); // TODO: rethink intCast
 
             var token: ?Token = null;
 
@@ -151,7 +153,7 @@ pub fn Deflate(comptime WriterType: type) type {
                 // If we've got a match that's good enough, only look in 1/4 the chain.
                 tries >>= 2;
             }
-            while (match_pos != Hasher.not_found and tries > 0) : (tries -= 1) {
+            while (match_pos != Lookup.not_found and tries > 0) : (tries -= 1) {
                 const distance = pos - match_pos;
                 if (distance > consts.match.max_distance or
                     match_pos < self.win.offset) break;
@@ -164,7 +166,7 @@ pub fn Deflate(comptime WriterType: type) type {
                     }
                     length = match_length;
                 }
-                match_pos = self.hasher.prev(match_pos);
+                match_pos = self.lookup.prev(match_pos);
             }
 
             return token;
@@ -201,11 +203,11 @@ pub fn Deflate(comptime WriterType: type) type {
             return input.len;
         }
 
-        // slide win and if needed hasher
+        // slide win and if needed lookup tables
         inline fn slide(self: *Self) void {
             const j = self.win.slide();
             if (j > 0)
-                self.hasher.slide(@intCast(j));
+                self.lookup.slide(@intCast(j));
         }
 
         pub fn compress(self: *Self, rdr: anytype) !void {
@@ -399,26 +401,32 @@ test "StreamWindow slide" {
     try expect(win.history().len == win.rp);
 }
 
-const Hasher = struct {
-    const mul = 0x1e35a7bd;
+const Lookup = struct {
+    const prime4 = 0x9E3779B1; // 4 bytes prime number 2654435761
     const not_found = (1 << 32) - 1;
     const mask = consts.window.mask;
 
+    // hash => location lookup
     head: [consts.hash.size]u32 = [_]u32{not_found} ** consts.hash.size,
+    // location => prev location for the same hash value
     chain: [consts.window.size]u32 = [_]u32{not_found} ** (consts.window.size),
 
-    fn add(self: *Hasher, data: []const u8, idx: u32) u32 {
+    // Calculates hash of the 4 bytes from data.
+    // Inserts idx location of that hash in the lookup tables.
+    // Resturns previous location with the same hash value.
+    pub fn add(self: *Lookup, data: []const u8, idx: u32) u32 {
         if (data.len < 4) return not_found;
         const h = hash(data[0..4]);
         return self.set(h, idx);
     }
 
-    fn prev(self: *Hasher, idx: u32) u32 {
+    // Previous location with the same hash value.
+    pub fn prev(self: *Lookup, idx: u32) u32 {
         const v = self.chain[idx & mask];
         return if (v > idx) not_found else v;
     }
 
-    inline fn set(self: *Hasher, h: u32, idx: u32) u32 {
+    inline fn set(self: *Lookup, h: u32, idx: u32) u32 {
         const p = self.head[h];
         self.head[h] = idx;
         self.chain[idx & mask] = p;
@@ -426,7 +434,7 @@ const Hasher = struct {
     }
 
     // Slide all positions in head and chain for n.
-    pub fn slide(self: *Hasher, n: u32) void {
+    pub fn slide(self: *Lookup, n: u32) void {
         for (self.head, 0..) |v, i| {
             if (v == not_found) continue;
             self.head[i] = if (v < n) not_found else v - n;
@@ -437,25 +445,28 @@ const Hasher = struct {
         }
     }
 
-    fn bulkAdd(self: *Hasher, b: []const u8, len: usize, idx: u32) void {
-        if (len == 0 or b.len < consts.match.min_length) {
+    // Add `len` 4 bytes hashes from `data` into lookup.
+    // Position of the first byte is `idx`.
+    pub fn bulkAdd(self: *Lookup, data: []const u8, len: usize, idx: u32) void {
+        if (len == 0 or data.len < consts.match.min_length) {
             return;
         }
         var hb =
-            @as(u32, b[3]) |
-            @as(u32, b[2]) << 8 |
-            @as(u32, b[1]) << 16 |
-            @as(u32, b[0]) << 24;
+            @as(u32, data[3]) |
+            @as(u32, data[2]) << 8 |
+            @as(u32, data[1]) << 16 |
+            @as(u32, data[0]) << 24;
         _ = self.set(hashu(hb), idx);
 
         var i = idx;
-        for (4..@min(len + 3, b.len)) |j| {
-            hb = (hb << 8) | @as(u32, b[j]);
+        for (4..@min(len + 3, data.len)) |j| {
+            hb = (hb << 8) | @as(u32, data[j]);
             i += 1;
             _ = self.set(hashu(hb), i);
         }
     }
 
+    // Calculates hash of the first 4 bytes of `b`.
     inline fn hash(b: *const [4]u8) u32 {
         return hashu(@as(u32, b[3]) |
             @as(u32, b[2]) << 8 |
@@ -464,11 +475,11 @@ const Hasher = struct {
     }
 
     inline fn hashu(v: u32) u32 {
-        return (v *% mul) >> consts.hash.shift;
+        return (v *% prime4) >> consts.hash.shift;
     }
 };
 
-test "Hasher add/prev" {
+test "Lookup add/prev" {
     const data = [_]u8{
         0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
         0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
@@ -476,49 +487,43 @@ test "Hasher add/prev" {
         0x01, 0x02, 0x03,
     };
 
-    var h: Hasher = .{};
+    var h: Lookup = .{};
     for (data, 0..) |_, i| {
         const prev = h.add(data[i..], @intCast(i));
         if (i >= 8 and i < 24) {
             try testing.expect(prev == i - 8);
         } else {
-            try testing.expect(prev == Hasher.not_found);
+            try testing.expect(prev == Lookup.not_found);
         }
     }
 
-    const v = Hasher.hash(data[2 .. 2 + 4]);
+    const v = Lookup.hash(data[2 .. 2 + 4]);
     try testing.expect(h.head[v] == 2 + 16);
     try testing.expect(h.chain[2 + 16] == 2 + 8);
     try testing.expect(h.chain[2 + 8] == 2);
 }
 
-test "Hasher bulkAdd" {
+test "Lookup bulkAdd" {
     const data = "Lorem ipsum dolor sit amet, consectetur adipiscing elit.";
 
     // one by one
-    var h: Hasher = .{};
+    var h: Lookup = .{};
     for (data, 0..) |_, i| {
         _ = h.add(data[i..], @intCast(i));
     }
 
     // in bulk
-    var bh: Hasher = .{};
+    var bh: Lookup = .{};
     bh.bulkAdd(data, data.len, 0);
 
     try testing.expectEqualSlices(u32, &h.head, &bh.head);
     try testing.expectEqualSlices(u32, &h.chain, &bh.chain);
 }
 
-test "Token size" {
-    // // TODO: remove this
-    // print("size of Tokens {d}\n", .{
-    //     @sizeOf(Tokens),
-    // });
+test "struct sizes" {
     try expect(@sizeOf(Token) == 4);
     try expect(@sizeOf(Tokens) == 131_080);
-    //try expect(@bitSizeOf(Token) == 26);
-    // print("size of Hasher {d}\n", .{@sizeOf(Hasher)});
-    try expect(@sizeOf(Hasher) == 655_360);
+    try expect(@sizeOf(Lookup) == 655_360);
 }
 
 const Tokens = struct {
