@@ -3,8 +3,8 @@ Notes:
 
 Test files used in benchmarks:
 ```
-mkdir -p src/testdata
-cd src/testdata
+mkdir -p src/benchdata
+cd src/benchdata
 
 wget https://github.com/ziglang/zig/archive/bb0f7d55e8c50e379fa9bdcb8758d89d08e0cc1f.tar.gz
 wget http://corpus.canterbury.ac.nz/resources/cantrbry.tar.gz

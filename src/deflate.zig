@@ -560,7 +560,7 @@ const Tokens = struct {
 test "deflate compress file to stdout" {
     if (true) return error.SkipZigTest;
 
-    const file_name = "testdata/2600.txt.utf-8";
+    const file_name = "benchdata/2600.txt.utf-8";
     var file = try std.fs.cwd().openFile(file_name, .{});
     defer file.close();
 
@@ -603,11 +603,11 @@ fn TokenDecoder(comptime WriterType: type) type {
 }
 
 test "gzip compress file" {
-    const input_file_name = "testdata/2600.txt.utf-8";
+    const input_file_name = "benchdata/2600.txt.utf-8";
     var input = try std.fs.cwd().openFile(input_file_name, .{});
     defer input.close();
 
-    const output_file_name = "testdata/output.gz";
+    const output_file_name = "benchdata/output.gz";
     var output = try std.fs.cwd().createFile(output_file_name, .{ .truncate = true });
     defer output.close();
 
@@ -615,11 +615,11 @@ test "gzip compress file" {
 }
 
 test "zlib compress file" {
-    const input_file_name = "testdata/2600.txt.utf-8";
+    const input_file_name = "benchdata/2600.txt.utf-8";
     var input = try std.fs.cwd().openFile(input_file_name, .{});
     defer input.close();
 
-    const output_file_name = "testdata/output.zz";
+    const output_file_name = "benchdata/output.zz";
     var output = try std.fs.cwd().createFile(output_file_name, .{ .truncate = true });
     defer output.close();
 
