@@ -1,9 +1,9 @@
 const std = @import("std");
 const flate = @import("flate");
 
-const data = @embedFile("benchdata/2600.txt.utf-8");
+//const data = @embedFile("benchdata/2600.txt.utf-8");
 
-//const data = @embedFile("benchdata/bb0f7d55e8c50e379fa9bdcb8758d89d08e0cc1f.tar");
+const data = @embedFile("benchdata/bb0f7d55e8c50e379fa9bdcb8758d89d08e0cc1f.tar");
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -19,7 +19,7 @@ pub fn main() !void {
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
         if (std.mem.eql(u8, args[i], "--std")) {
-            try stdZlib(output);
+            //try stdZlib(output);
             return;
         } else {
             std.os.exit(1);

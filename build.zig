@@ -99,8 +99,8 @@ pub fn build(b: *std.Build) void {
     });
 
     const gzip_bench = b.addExecutable(.{
-        .name = "gzip_bench",
-        .root_source_file = .{ .path = "bin/gzip_bench.zig" },
+        .name = "deflate_bench",
+        .root_source_file = .{ .path = "bin/deflate_bench.zig" },
         .target = target,
         .optimize = optimize,
     });
