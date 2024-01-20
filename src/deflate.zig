@@ -148,12 +148,13 @@ pub fn Deflate(comptime WriterType: type) type {
             }
             while (match_pos != Lookup.not_found and tries > 0) : (tries -= 1) {
                 const distance = pos - match_pos;
-                if (distance > consts.match.max_distance or
-                    match_pos < self.win.offset) break;
+                if (distance > consts.match.max_distance or match_pos < self.win.offset)
+                    break;
+
                 const match_length = self.win.match(match_pos, pos, length);
                 if (match_length > length) {
                     token = Token.initMatch(@intCast(distance), match_length);
-                    if (length >= level.nice) {
+                    if (match_length >= level.nice) {
                         // The match is good enough that we don't try to find a better one.
                         return token;
                     }
