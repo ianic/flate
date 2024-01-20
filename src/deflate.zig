@@ -157,7 +157,7 @@ pub fn Deflate(comptime WriterType: type) type {
                 const distance = pos - match_pos;
                 if (distance > consts.match.max_distance or
                     match_pos < self.win.offset) break;
-                const match_length = self.win.match(match_pos, pos);
+                const match_length = self.win.match(match_pos, pos, length);
                 if (match_length > length) {
                     token = Token.initMatch(@intCast(distance), match_length);
                     if (length >= level.nice) {
@@ -348,7 +348,7 @@ const StreamWindow = struct {
     }
 
     // Finds match length between previous and current position.
-    pub fn match(self: *StreamWindow, prev: usize, curr: usize) u16 {
+    pub fn match(self: *StreamWindow, prev: usize, curr: usize, min_len: usize) u16 {
         assert(prev >= self.offset and curr > prev);
         const a_head: usize = prev - self.offset;
         const b_head: usize = curr - self.offset;
@@ -356,6 +356,9 @@ const StreamWindow = struct {
         const b = self.buffer[b_head..self.wp];
 
         const max_len: usize = @min(b.len, consts.match.max_length);
+        if (max_len <= min_len or
+            a[min_len] != b[min_len]) return 0;
+
         var i: usize = 0;
         while (i < max_len) : (i += 1)
             if (a[i] != b[i]) break;
@@ -376,10 +379,10 @@ test "StreamWindow match" {
     try expect(win.rp == 0);
 
     // length between l symbols
-    try expect(win.match(1, 6) == 18);
-    try expect(win.match(1, 11) == 13);
-    try expect(win.match(1, 16) == 8);
-    try expect(win.match(1, 21) == 0);
+    try expect(win.match(1, 6, 0) == 18);
+    try expect(win.match(1, 11, 0) == 13);
+    try expect(win.match(1, 16, 0) == 8);
+    try expect(win.match(1, 21, 0) == 0);
 }
 
 test "StreamWindow slide" {
