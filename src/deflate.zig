@@ -349,20 +349,18 @@ const StreamWindow = struct {
 
     // Finds match length between previous and current position.
     pub fn match(self: *StreamWindow, prev: usize, curr: usize) u16 {
-        //if (!(prev > self.offset and curr > prev)) {
-        //if (self.offset > 0)
-        //            print("match prev: {d}, self.offset: {d}, curr: {d}\n", .{ prev, self.offset, curr });
-        //}
         assert(prev >= self.offset and curr > prev);
-        var p1: usize = prev - self.offset;
-        var p2: usize = curr - self.offset;
-        var n: u16 = 0;
-        while (p2 < self.wp and self.buffer[p1] == self.buffer[p2] and n < consts.match.max_length) {
-            n += 1;
-            p1 += 1;
-            p2 += 1;
-        }
-        return if (n > consts.match.min_length) n else 0;
+        const a_head: usize = prev - self.offset;
+        const b_head: usize = curr - self.offset;
+        const a = self.buffer[a_head..self.wp];
+        const b = self.buffer[b_head..self.wp];
+
+        const max_len: usize = @min(b.len, consts.match.max_length);
+        var i: usize = 0;
+        while (i < max_len) : (i += 1)
+            if (a[i] != b[i]) break;
+
+        return if (i > consts.match.min_length) @intCast(i) else 0;
     }
 
     pub fn pos(self: *StreamWindow) usize {
