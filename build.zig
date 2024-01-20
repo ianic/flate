@@ -93,4 +93,17 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     b.installArtifact(bench);
+
+    const flate_module = b.addModule("flate", .{
+        .source_file = .{ .path = "src/root.zig" },
+    });
+
+    const gzip_bench = b.addExecutable(.{
+        .name = "gzip_bench",
+        .root_source_file = .{ .path = "bin/gzip_bench.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
+    gzip_bench.addModule("flate", flate_module);
+    b.installArtifact(gzip_bench);
 }
