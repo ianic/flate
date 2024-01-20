@@ -350,15 +350,21 @@ const StreamWindow = struct {
 
         const max_len: usize = @min(b.len, consts.match.max_length);
         // If we alread have match (min_len > 0),
-        // test the first byte above previous len.
-        // Prevents entering loop for testing each byte.
-        if (min_len > 0 and (max_len <= min_len or a[min_len] != b[min_len]))
-            return 0;
-
-        var i: usize = 0;
+        // test the first byte above previous len a[min_len] != b[min_len]
+        // and then all the bytes from that position to zero.
+        // That is likely positions to find difference than looping from first bytes.
+        var i: usize = min_len;
+        if (i > 0) {
+            if (max_len <= i) return 0;
+            while (true) {
+                if (a[i] != b[i]) return 0;
+                if (i == 0) break;
+                i -= 1;
+            }
+            i = min_len;
+        }
         while (i < max_len) : (i += 1)
             if (a[i] != b[i]) break;
-
         return if (i >= consts.match.min_length) @intCast(i) else 0;
     }
 
