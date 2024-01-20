@@ -431,7 +431,7 @@ const Lookup = struct {
     }
 
     // Previous location with the same hash value.
-    pub fn prev(self: *Lookup, idx: u32) u32 {
+    pub inline fn prev(self: *Lookup, idx: u32) u32 {
         const v = self.chain[idx & mask];
         return if (v > idx) not_found else v;
     }

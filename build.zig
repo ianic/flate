@@ -98,12 +98,22 @@ pub fn build(b: *std.Build) void {
         .source_file = .{ .path = "src/root.zig" },
     });
 
-    const gzip_bench = b.addExecutable(.{
-        .name = "deflate_bench",
-        .root_source_file = .{ .path = "bin/deflate_bench.zig" },
-        .target = target,
-        .optimize = optimize,
-    });
-    gzip_bench.addModule("flate", flate_module);
-    b.installArtifact(gzip_bench);
+    const bins = [_]struct {
+        name: []const u8,
+        src: []const u8,
+    }{
+        .{ .name = "deflate_bench", .src = "bin/deflate_bench.zig" },
+        .{ .name = "gzip", .src = "bin/gzip.zig" },
+    };
+
+    for (bins) |i| {
+        const bin = b.addExecutable(.{
+            .name = i.name,
+            .root_source_file = .{ .path = i.src },
+            .target = target,
+            .optimize = optimize,
+        });
+        bin.addModule("flate", flate_module);
+        b.installArtifact(bin);
+    }
 }
