@@ -67,12 +67,11 @@ pub fn Deflate(comptime WriterType: type) type {
                 var step: usize = 1; // 1 in the case of literal, match length otherwise
                 const pos: usize = self.win.pos();
                 const literal = lh[0]; // literal at current position
-                const min_len: u16 = if (self.prev_match) |m| m.length() else consts.match.min_length;
+                const min_len: u16 = if (self.prev_match) |m| m.length() else 0;
 
                 // Try to find match at least min_len long.
                 if (self.findMatch(pos, lh, min_len)) |match| {
                     // Found better match than previous.
-
                     try self.addPrevLiteral();
 
                     // Is found match length good enough?
@@ -98,7 +97,7 @@ pub fn Deflate(comptime WriterType: type) type {
                     }
                 }
                 // Advance window and add hashes.
-                self.windowAdvance(step);
+                self.windowAdvance(step, lh, pos);
             }
 
             if (flsh) {
@@ -112,13 +111,9 @@ pub fn Deflate(comptime WriterType: type) type {
             if (flsh) try self.flushTokens(opt == .final);
         }
 
-        inline fn windowAdvance(self: *Self, step: usize) void {
+        inline fn windowAdvance(self: *Self, step: usize, lh: []const u8, pos: usize) void {
             // assuming current position is already added in findMatch
-            if (step > 1) {
-                const lh = self.win.lookahead();
-                const pos = self.win.pos();
-                self.lookup.bulkAdd(lh[1..], step - 1, @intCast(pos + 1));
-            }
+            self.lookup.bulkAdd(lh[1..], step - 1, @intCast(pos + 1));
             self.win.advance(step);
         }
 
@@ -142,10 +137,8 @@ pub fn Deflate(comptime WriterType: type) type {
         }
 
         fn findMatch(self: *Self, pos: usize, lh: []const u8, min_len: u16) ?Token {
-            var length: usize = min_len;
-
+            var length: u16 = min_len;
             var match_pos = self.lookup.add(lh, @intCast(pos)); // TODO: rethink intCast
-
             var token: ?Token = null;
 
             var tries: usize = level.chain;
@@ -348,7 +341,7 @@ const StreamWindow = struct {
     }
 
     // Finds match length between previous and current position.
-    pub fn match(self: *StreamWindow, prev: usize, curr: usize, min_len: usize) u16 {
+    pub fn match(self: *StreamWindow, prev: usize, curr: usize, min_len: u16) u16 {
         assert(prev >= self.offset and curr > prev);
         const a_head: usize = prev - self.offset;
         const b_head: usize = curr - self.offset;
@@ -356,14 +349,17 @@ const StreamWindow = struct {
         const b = self.buffer[b_head..self.wp];
 
         const max_len: usize = @min(b.len, consts.match.max_length);
-        if (max_len <= min_len or
-            a[min_len] != b[min_len]) return 0;
+        // If we alread have match (min_len > 0),
+        // test the first byte above previous len.
+        // Prevents entering loop for testing each byte.
+        if (min_len > 0 and (max_len <= min_len or a[min_len] != b[min_len]))
+            return 0;
 
         var i: usize = 0;
         while (i < max_len) : (i += 1)
             if (a[i] != b[i]) break;
 
-        return if (i > consts.match.min_length) @intCast(i) else 0;
+        return if (i >= consts.match.min_length) @intCast(i) else 0;
     }
 
     pub fn pos(self: *StreamWindow) usize {
@@ -383,6 +379,12 @@ test "StreamWindow match" {
     try expect(win.match(1, 11, 0) == 13);
     try expect(win.match(1, 16, 0) == 8);
     try expect(win.match(1, 21, 0) == 0);
+
+    // position 15 = "blah blah!"
+    // position 20 = "blah!"
+    try expect(win.match(15, 20, 0) == 4);
+    try expect(win.match(15, 20, 3) == 4);
+    try expect(win.match(15, 20, 4) == 0);
 }
 
 test "StreamWindow slide" {
