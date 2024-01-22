@@ -14,17 +14,13 @@ pub const match = struct {
     pub const max_distance = 32768;
 };
 
-pub const window = struct { // TODO: consider renaming this into history
-    pub const bits = 15;
-    pub const size = 1 << bits;
-    pub const mask = size - 1;
+pub const history = struct {
+    pub const len = match.max_distance;
 };
 
-pub const hash = struct {
+pub const lookup = struct {
     pub const bits = 17;
-    pub const size = 1 << bits;
-    pub const mask = size - 1;
-    pub const shift = 32 - bits;
+    pub const len = 1 << bits;
 };
 
 // TODO: organize this
