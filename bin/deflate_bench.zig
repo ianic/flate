@@ -18,18 +18,38 @@ pub fn main() !void {
 
     //const output = std.io.getStdOut().writer();
 
-    const output = NullWriter.init().writer();
+    // const output = NullWriter.init().writer();
+
+    var stdout: bool = false;
+    var std_zlib: bool = false;
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
         if (std.mem.eql(u8, args[i], "--std")) {
-            try stdZlib(output);
-            return;
+            std_zlib = true;
+            continue;
+        }
+        if (std.mem.eql(u8, args[i], "-c")) {
+            stdout = true;
         } else {
+            std.debug.print("invalid option '{s}'\n", .{args[i]});
             std.os.exit(1);
         }
     }
-    try lib(output);
+
+    if (stdout) {
+        try run(std.io.getStdOut().writer(), std_zlib);
+    } else {
+        try run(NullWriter.init().writer(), std_zlib);
+    }
+}
+
+pub fn run(output: anytype, std_zlib: bool) !void {
+    if (std_zlib) {
+        try stdZlib(output);
+    } else {
+        try lib(output);
+    }
 }
 
 pub fn lib(output: anytype) !void {
