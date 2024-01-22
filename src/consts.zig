@@ -19,8 +19,9 @@ pub const history = struct {
 };
 
 pub const lookup = struct {
-    pub const bits = 17;
+    pub const bits = 15;
     pub const len = 1 << bits;
+    pub const shift = 32 - bits;
 };
 
 // TODO: organize this

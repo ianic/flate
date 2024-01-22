@@ -410,7 +410,8 @@ test "StreamWindow slide" {
 test "struct sizes" {
     try expect(@sizeOf(Token) == 4);
     try expect(@sizeOf(Tokens) == 131_080);
-    try expect(@sizeOf(Lookup) == 393_216);
+    // print("size of Lookup {d}\n", .{@sizeOf(Lookup)});
+    try expect(@sizeOf(Lookup) == 196_608);
 }
 
 const Tokens = struct {
