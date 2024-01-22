@@ -1,7 +1,7 @@
 ### Benchmarks
 
 Huge file ziglang repo tar:
-
+```sh
 $ time gzip -kf ziglang.tar
 gzip -kf ziglang.tar  2.50s user 0.03s system 99% cpu 2.532 total
 24716226 ziglang.tar.gz
@@ -9,10 +9,10 @@ gzip -kf ziglang.tar  2.50s user 0.03s system 99% cpu 2.532 total
 $ time zig-out/bin/gzip ziglang.tar
 zig-out/bin/gzip ziglang.tar  2.11s user 0.07s system 99% cpu 2.179 total
 24684593 ziglang.tar.gz
+```
 
-
-Big file Tolstoy's War and Peace
-
+Big file Tolstoy's War and Peace:
+```sh
 $ time zig-out/bin/gzip book
 zig-out/bin/gzip book  0.14s user 0.00s system 99% cpu 0.145 total
 1218418 book.gz
@@ -20,8 +20,10 @@ zig-out/bin/gzip book  0.14s user 0.00s system 99% cpu 0.145 total
 $ time gzip -kf book
 gzip -kf book  0.16s user 0.00s system 98% cpu 0.165 total
 1225959 book.gz
+```
 
 Performance with gzip:
+```sh
 $ zig build -Doptimize=ReleaseSafe && hyperfine 'zig-out/bin/gzip ziglang.tar' 'gzip -kf ziglang.tar'
 
 Benchmark 1: zig-out/bin/gzip ziglang.tar
@@ -35,9 +37,10 @@ Benchmark 2: gzip -kf ziglang.tar
 Summary
   zig-out/bin/gzip ziglang.tar ran
     1.16 ± 0.00 times faster than gzip -kf ziglang.tar
-
+```
 
 With current std lib implementation:
+```sh
 $ zig build -Doptimize=ReleaseSafe && hyperfine --warmup 1 'zig-out/bin/deflate_bench' 'zig-out/bin/deflate_bench --std'
 
 Benchmark 1: zig-out/bin/deflate_bench
@@ -51,23 +54,26 @@ Benchmark 2: zig-out/bin/deflate_bench --std
 Summary
   zig-out/bin/deflate_bench ran
     1.14 ± 0.01 times faster than zig-out/bin/deflate_bench --std
-        
-Size with std lib:
+```
 
-Huge: 
+Size with std lib:  
+
+Huge file: 
+```sh
 zig-out/bin/deflate_bench -c | wc -c
 24716214
 
 zig-out/bin/deflate_bench -c --std | wc -c
 24716129
-
+```
 Big:
+```sh
 zig-out/bin/deflate_bench -c | wc -c
 1218406
 
 zig-out/bin/deflate_bench -c --std | wc -c
 1226277
-
+```
 
 ### References:
 
