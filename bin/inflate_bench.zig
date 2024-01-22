@@ -1,5 +1,7 @@
 const std = @import("std");
-const inflate = @import("inflate.zig").inflate;
+const flate = @import("flate");
+const inflate = flate.inflate;
+
 const assert = std.debug.assert;
 
 const data = @embedFile("benchdata/bb0f7d55e8c50e379fa9bdcb8758d89d08e0cc1f.tar.gz");
