@@ -675,12 +675,12 @@ const Lookup = struct {
 
     // Slide all positions in head and chain for n.
     pub fn slide(self: *Lookup, n: u16) void {
-        // TODO: try vector slide
         for (&self.head) |*v| {
             v.* -|= n;
         }
-        for (&self.chain) |*v| {
-            v.* -|= n;
+        var i: usize = 0;
+        while (i < n) : (i += 1) {
+            self.chain[i] = self.chain[i + n] -| n;
         }
     }
 
@@ -757,4 +757,20 @@ test "Lookup bulkAdd" {
 
     try testing.expectEqualSlices(u16, &h.head, &bh.head);
     try testing.expectEqualSlices(u16, &h.chain, &bh.chain);
+}
+
+test "vector" {
+    const nn = 32768;
+    var chain: [nn * 2]u16 = undefined;
+
+    var v1: @Vector(nn, u16) = chain[0..nn].*;
+    const v2: @Vector(nn, u16) = chain[nn..].*;
+    const v3: @Vector(nn, u16) = @splat(nn);
+
+    print("{d} {d}\n", .{ v1[0], v2[0] });
+    v1 = v2 -| v3;
+    print("{d} {d}\n", .{ v1[0], v2[0] });
+    chain[0..nn].* = v1;
+    //chain = v1;
+    print("{d} \n", .{chain[0]});
 }
