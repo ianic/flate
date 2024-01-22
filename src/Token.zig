@@ -187,7 +187,7 @@ pub fn literal(t: Token) u8 {
 }
 
 pub fn offset(t: Token) u16 {
-    return t.off + consts.match.min_distance;
+    return @as(u16, t.off) + consts.match.min_distance;
 }
 
 pub fn length(t: Token) u16 {
