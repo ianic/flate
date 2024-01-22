@@ -2,13 +2,14 @@
 
 Huge file ziglang repo tar:
 ```sh
-$ time gzip -kf ziglang.tar
-gzip -kf ziglang.tar  2.50s user 0.03s system 99% cpu 2.532 total
-24716226 ziglang.tar.gz
-
 $ time zig-out/bin/gzip ziglang.tar
 zig-out/bin/gzip ziglang.tar  2.11s user 0.07s system 99% cpu 2.179 total
 24684593 ziglang.tar.gz
+
+
+$ time gzip -kf ziglang.tar
+gzip -kf ziglang.tar  2.50s user 0.03s system 99% cpu 2.532 total
+24716226 ziglang.tar.gz
 ```
 
 Big file Tolstoy's War and Peace:
