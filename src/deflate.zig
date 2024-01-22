@@ -56,18 +56,18 @@ pub fn Deflate(comptime WriterType: type) type {
             return .{ .token_writer = w };
         }
 
-        const ProcessOption = enum { none, flush, final };
+        const TokenizeOption = enum { none, flush, final };
 
         // Process data in window and create tokens. If token buffer is full
         // flush tokens to the token writer. In the case of `flush` or `final`
         // option it will process all data from the window. In the `none` case
         // it will preserve some data for the next match.
-        fn processWindow(self: *Self, opt: ProcessOption) !void {
+        fn tokenize(self: *Self, opt: TokenizeOption) !void {
             // flush - process all data from window
-            const flsh = (opt != .none);
+            const should_flush = (opt != .none);
 
             // While there is data in active lookahead buffer.
-            while (self.win.activeLookahead(flsh)) |lh| {
+            while (self.win.activeLookahead(should_flush)) |lh| {
                 var step: u16 = 1; // 1 in the case of literal, match length otherwise
                 const pos: u16 = self.win.pos();
                 const literal = lh[0]; // literal at current position
@@ -104,15 +104,15 @@ pub fn Deflate(comptime WriterType: type) type {
                 self.windowAdvance(step, lh, pos);
             }
 
-            if (flsh) {
+            if (should_flush) {
                 // In the case of flushing, last few lookahead buffers were smaller then min match len.
                 // So only last literal can be unwritten.
                 assert(self.prev_match == null);
                 try self.addPrevLiteral();
                 self.prev_literal = null;
-            }
 
-            if (flsh) try self.flushTokens(opt == .final);
+                try self.flushTokens(opt == .final);
+            }
         }
 
         inline fn windowAdvance(self: *Self, step: u16, lh: []const u8, pos: u16) void {
@@ -182,11 +182,11 @@ pub fn Deflate(comptime WriterType: type) type {
         }
 
         pub fn flush(self: *Self) !void {
-            try self.processWindow(.flush);
+            try self.tokenize(.flush);
         }
 
         pub fn close(self: *Self) !void {
-            try self.processWindow(.final);
+            try self.tokenize(.final);
         }
 
         pub fn write(self: *Self, input: []const u8) !usize {
@@ -195,13 +195,13 @@ pub fn Deflate(comptime WriterType: type) type {
             while (buf.len > 0) {
                 const n = self.win.write(buf);
                 if (n == 0) {
-                    try self.processWindow(.none);
+                    try self.tokenize(.none);
                     self.slide();
                     continue;
                 }
                 buf = buf[n..];
             }
-            try self.processWindow(.none);
+            try self.tokenize(.none);
 
             return input.len;
         }
@@ -223,7 +223,7 @@ pub fn Deflate(comptime WriterType: type) type {
                 const n = try rdr.readAll(buf);
                 self.win.written(n);
                 // process win
-                try self.processWindow(.none);
+                try self.tokenize(.none);
                 // no more data in reader
                 if (n < buf.len) break;
             }
@@ -665,7 +665,7 @@ const Lookup = struct {
         return self.chain[idx];
     }
 
-    inline fn set(self: *Lookup, h: u16, idx: u16) u16 {
+    inline fn set(self: *Lookup, h: u32, idx: u16) u16 {
         const p = self.head[h];
         self.head[h] = idx;
         self.chain[idx] = p;
@@ -705,15 +705,15 @@ const Lookup = struct {
     }
 
     // Calculates hash of the first 4 bytes of `b`.
-    inline fn hash(b: *const [4]u8) u16 {
+    inline fn hash(b: *const [4]u8) u32 {
         return hashu(@as(u32, b[3]) |
             @as(u32, b[2]) << 8 |
             @as(u32, b[1]) << 16 |
             @as(u32, b[0]) << 24);
     }
 
-    inline fn hashu(v: u32) u16 {
-        return @intCast((v *% prime4) >> 16);
+    inline fn hashu(v: u32) u32 {
+        return @intCast((v *% prime4) >> consts.lookup.shift);
     }
 };
 
