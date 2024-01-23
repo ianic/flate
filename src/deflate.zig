@@ -194,9 +194,10 @@ pub fn Deflate(comptime WriterType: type) type {
         }
 
         fn flushTokens(self: *Self, final: bool) !void {
-            try self.token_writer.writeBlock(self.tokens.tokens(), final, null);
+            try self.token_writer.writeBlock(self.tokens.tokens(), final, self.win.tokensBuffser());
             if (final) try self.token_writer.flush();
             self.tokens.reset();
+            self.win.flushed();
         }
 
         pub fn flush(self: *Self) !void {
@@ -309,6 +310,7 @@ const Window = struct {
     buffer: [buffer_len]u8 = undefined,
     wp: usize = 0, // write position
     rp: usize = 0, // read position
+    fp: isize = 0, // flush position, tokens are build from fp..rp
 
     // Returns number of bytes written, or 0 if buffer is full and need to slide.
     pub fn write(self: *Window, buf: []const u8) usize {
@@ -329,6 +331,7 @@ const Window = struct {
         @memcpy(self.buffer[0..n], self.buffer[hist_len..self.wp]);
         self.rp -= hist_len;
         self.wp -= hist_len;
+        self.fp -= hist_len;
         return @intCast(n);
     }
 
@@ -388,6 +391,16 @@ const Window = struct {
     pub fn pos(self: *Window) u16 {
         return @intCast(self.rp);
     }
+
+    pub fn flushed(self: *Window) void {
+        self.fp = @intCast(self.rp);
+    }
+
+    pub fn tokensBuffser(self: *Window) ?[]const u8 {
+        assert(self.fp <= self.rp);
+        if (self.fp < 0) return null;
+        return self.buffer[@intCast(self.fp)..self.rp];
+    }
 };
 
 test "StreamWindow match" {
@@ -416,6 +429,7 @@ test "StreamWindow slide" {
     win.rp = Window.buffer_len - 111;
     win.buffer[win.rp] = 0xab;
     try expect(win.lookahead().len == 100);
+    try expect(win.tokensBuffser().?.len == win.rp);
 
     const n = win.slide();
     try expect(n == 32757);
@@ -423,6 +437,7 @@ test "StreamWindow slide" {
     try expect(win.rp == Window.hist_len - 111);
     try expect(win.wp == Window.hist_len - 11);
     try expect(win.lookahead().len == 100);
+    try expect(win.tokensBuffser() == null);
 }
 
 test "check struct sizes" {
@@ -436,8 +451,8 @@ test "check struct sizes" {
     const lookup_size = 192 * 1024;
     try expect(@sizeOf(Lookup) == lookup_size);
 
-    // buffer: (32k * 2), wp: 8, rp: 8
-    const window_size = 64 * 1024 + 8 + 8;
+    // buffer: (32k * 2), wp: 8, rp: 8, fp: 8
+    const window_size = 64 * 1024 + 8 + 8 + 8;
     try expect(@sizeOf(Window) == window_size);
 
     const Hbw = hbw.HuffmanBitWriter(std.io.FixedBufferStream([]const u8).Writer);
@@ -538,7 +553,7 @@ test "gzip compress file" {
     var output = try std.fs.cwd().createFile(output_file_name, .{ .truncate = true });
     defer output.close();
 
-    try gzip(input.reader(), output.writer());
+    try gzip(input.reader(), output.writer(), .{});
 }
 
 test "zlib compress file" {
@@ -550,7 +565,7 @@ test "zlib compress file" {
     var output = try std.fs.cwd().createFile(output_file_name, .{ .truncate = true });
     defer output.close();
 
-    try zlib(input.reader(), output.writer());
+    try zlib(input.reader(), output.writer(), .{});
 }
 
 pub fn gzip(reader: anytype, writer: anytype, options: Options) !void {
