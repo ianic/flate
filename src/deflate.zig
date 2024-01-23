@@ -407,11 +407,33 @@ test "StreamWindow slide" {
     try expect(win.lookahead().len == 100);
 }
 
-test "struct sizes" {
+test "check struct sizes" {
     try expect(@sizeOf(Token) == 4);
-    try expect(@sizeOf(Tokens) == 131_080);
-    // print("size of Lookup {d}\n", .{@sizeOf(Lookup)});
-    try expect(@sizeOf(Lookup) == 196_608);
+
+    // list: (1 << 15) * 4 = 128k + pos: 8
+    const tokens_size = 128 * 1024 + 8;
+    try expect(@sizeOf(Tokens) == tokens_size);
+
+    // head: (1 << 15) * 2 = 64k, chain: (32768 * 2) * 2  = 128k = 192k
+    const lookup_size = 192 * 1024;
+    try expect(@sizeOf(Lookup) == lookup_size);
+
+    // buffer: (32k * 2), wp: 8, rp: 8
+    const window_size = 64 * 1024 + 8 + 8;
+    try expect(@sizeOf(Window) == window_size);
+
+    const Hbw = hbw.HuffmanBitWriter(std.io.FixedBufferStream([]const u8).Writer);
+    // huffman bit writer internal: 11480, fixed buffer stream: 8
+    const hbw_size = 11480 + 8; // 11,21875k
+    try expect(@sizeOf(Hbw) == hbw_size);
+
+    const D = Deflate(Hbw);
+
+    // 404_736, 395.25k
+    // ?Token: 6, ?u8: 2
+    try expect(@sizeOf(D) == tokens_size + lookup_size + window_size + hbw_size + 6 + 2);
+
+    //print("Delfate size: {d}\n", .{@sizeOf(D)});
 }
 
 const Tokens = struct {
