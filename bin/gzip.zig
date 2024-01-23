@@ -2,7 +2,7 @@ const std = @import("std");
 const flate = @import("flate");
 
 // Comparable to standard gzip with -kf flags:
-// $ gzip -kf <file_name>
+// $ gzip -kfn <file_name>
 //
 pub fn main() !void {
     var args = std.process.args();
