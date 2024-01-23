@@ -162,14 +162,12 @@ pub fn Deflate(comptime WriterType: type) type {
 
                 const new_len = self.win.match(prev_pos, pos, len);
                 if (new_len > len) {
-                    //if (new_len == consts.match.min_length and distance > 4096) {} else {
                     match = Token.initMatch(@intCast(distance), new_len);
                     if (new_len >= level.nice) {
                         // The match is good enough that we don't try to find a better one.
                         return match;
                     }
                     len = new_len;
-                    //}
                 }
                 prev_pos = self.lookup.prev(prev_pos);
             }
