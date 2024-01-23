@@ -35,18 +35,19 @@ pub fn run(output: anytype, opt: Options) !void {
 
     if (opt.stdlib) {
         switch (opt.alg) {
-            .deflate => try stdDeflate(input, output),
-            .zlib => try stdZlib(input, output),
+            .deflate => try stdDeflate(input, output, opt),
+            .zlib => try stdZlib(input, output, opt),
             .gzip => {
                 print("There is no gzip compressor currently in std lib.\n", .{});
             },
         }
     } else {
         var fbs = std.io.fixedBufferStream(input);
+        const f_opt: flate.Options = .{ .level = @enumFromInt(opt.level) };
         switch (opt.alg) {
-            .deflate => try flate.deflate(fbs.reader(), output),
-            .zlib => try flate.zlib(fbs.reader(), output),
-            .gzip => try flate.gzip(fbs.reader(), output),
+            .deflate => try flate.deflate(fbs.reader(), output, f_opt),
+            .zlib => try flate.zlib(fbs.reader(), output, f_opt),
+            .gzip => try flate.gzip(fbs.reader(), output, f_opt),
         }
     }
 }
@@ -70,6 +71,7 @@ const Options = struct {
     stdlib: bool = false,
     input_index: u8 = 0,
     alg: Algorithm = .deflate,
+    level: u8 = 6,
 };
 
 fn usage() void {
@@ -83,6 +85,7 @@ fn usage() void {
         \\  -s                 use Zig's std lib implementation
         \\  -g                 gzip
         \\  -z                 zlib
+        \\  -l [4-9]           compression level
         \\  -h, --help         give this help
         \\
     , .{});
@@ -129,6 +132,19 @@ pub fn readArgs() !?Options {
             }
             continue;
         }
+        if (std.mem.eql(u8, a, "-l")) {
+            if (args.next()) |i| {
+                opt.level = try std.fmt.parseInt(u8, i, 10);
+                if (opt.level > 9 or opt.level < 4) {
+                    print("Compression level must be in range 4-9!\n", .{});
+                    return error.InvalidArgs;
+                }
+            } else {
+                print("Missing compression level -l option!\n", .{});
+                return error.InvalidArgs;
+            }
+            continue;
+        }
         if (std.mem.eql(u8, a, "-g")) {
             opt.alg = .gzip;
             continue;
@@ -147,18 +163,23 @@ pub fn readArgs() !?Options {
     return opt;
 }
 
-pub fn stdZlib(input: []const u8, writer: anytype) !void {
+pub fn stdZlib(input: []const u8, writer: anytype, opt: Options) !void {
+    var z_opt: std.compress.zlib.CompressStreamOptions = .{ .level = .default };
+    if (opt.level == 4) z_opt.level = .fastest;
+    if (opt.level == 9) z_opt.level = .maximum;
+
     const allocator = std.heap.page_allocator;
-    var cmp = try std.compress.zlib.compressStream(allocator, writer, .{ .level = .default });
+    var cmp = try std.compress.zlib.compressStream(allocator, writer, z_opt);
     defer cmp.deinit();
 
     try cmp.writer().writeAll(input);
     try cmp.finish();
 }
 
-pub fn stdDeflate(input: []const u8, writer: anytype) !void {
+pub fn stdDeflate(input: []const u8, writer: anytype, opt: Options) !void {
     const allocator = std.heap.page_allocator;
-    var cmp = try std.compress.deflate.compressor(allocator, writer, .{});
+    const c_opt = std.compress.deflate.CompressorOptions{ .level = @enumFromInt(opt.level) };
+    var cmp = try std.compress.deflate.compressor(allocator, writer, c_opt);
     defer cmp.deinit();
 
     try cmp.writer().writeAll(input);

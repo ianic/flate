@@ -7,44 +7,59 @@ const Token = @import("Token.zig");
 const consts = @import("consts.zig");
 const hbw = @import("huffman_bit_writer.zig");
 
-pub fn deflateWriter(writer: anytype) Deflate(@TypeOf(writer)) {
-    return Deflate(@TypeOf(writer)).init(writer);
+pub fn deflateWriter(writer: anytype, options: Options) Deflate(@TypeOf(writer)) {
+    return Deflate(@TypeOf(writer)).init(writer, options);
 }
 
-pub fn deflate(reader: anytype, writer: anytype) !void {
+pub fn deflate(reader: anytype, writer: anytype, options: Options) !void {
     const tw = hbw.huffmanBitWriter(writer);
-    var df = Deflate(@TypeOf(tw)).init(tw);
+    var df = Deflate(@TypeOf(tw)).init(tw, options);
     try df.compress(reader);
     try df.close();
 }
 
-const Compression = enum {
-    default,
-    best,
+pub const Level = enum(u4) {
+    // zig fmt: off
+    fast = 0xa,    level_4 = 4,
+                   level_5 = 5,
+    default = 0xb, level_6 = 6,
+                   level_7 = 7,
+                   level_8 = 8,
+    best = 0xc,    level_9 = 9,
+    // zig fmt: on
 };
 
-const Level = struct {
+const LevelArgs = struct {
     good: u16, // do less lookups if we already have match of this length
     nice: u16, // stop looking for better match if we found match with at least this length
     lazy: u16, // don't do lazy match find if got match with at least this length
     chain: u16, // how many lookups for previous match to perform
 
-    pub fn get(compression: Compression) Level {
-        return switch (compression) {
-            .default => .{ .good = 8, .lazy = 16, .nice = 128, .chain = 128 },
-            .best => .{ .good = 32, .lazy = 258, .nice = 258, .chain = 4096 },
+    pub fn get(level: Level) LevelArgs {
+        // zig fmt: off
+        return switch (level) {
+            .fast,    .level_4 => .{ .good =  4, .lazy =   4, .nice =  16, .chain =   16 },
+                      .level_5 => .{ .good =  8, .lazy =  16, .nice =  32, .chain =   32 },
+            .default, .level_6 => .{ .good =  8, .lazy =  16, .nice = 128, .chain =  128 },
+                      .level_7 => .{ .good =  8, .lazy =  32, .nice = 128, .chain =  256 },
+                      .level_8 => .{ .good = 32, .lazy = 128, .nice = 258, .chain = 1024 },
+            .best,    .level_9 => .{ .good = 32, .lazy = 258, .nice = 258, .chain = 4096 },
         };
+        // zig fmt: on
     }
 };
 
-pub fn Deflate(comptime WriterType: type) type {
-    const level = Level.get(.default);
+pub const Options = struct {
+    level: Level = .default,
+};
 
+pub fn Deflate(comptime WriterType: type) type {
     return struct {
         lookup: Lookup = .{},
         win: Window = .{},
         tokens: Tokens = .{},
         token_writer: WriterType,
+        level: LevelArgs,
 
         // Match and literal at the previous position.
         // Used for lazy match finding in processWindow.
@@ -52,8 +67,11 @@ pub fn Deflate(comptime WriterType: type) type {
         prev_literal: ?u8 = null,
 
         const Self = @This();
-        pub fn init(w: WriterType) Self {
-            return .{ .token_writer = w };
+        pub fn init(w: WriterType, options: Options) Self {
+            return .{
+                .token_writer = w,
+                .level = LevelArgs.get(options.level),
+            };
         }
 
         const TokenizeOption = enum { none, flush, final };
@@ -79,7 +97,7 @@ pub fn Deflate(comptime WriterType: type) type {
                     try self.addPrevLiteral();
 
                     // Is found match length good enough?
-                    if (match.length() >= level.lazy) {
+                    if (match.length() >= self.level.lazy) {
                         // Don't try to lazy find better match, use this.
                         step = try self.addMatch(match);
                     } else {
@@ -149,8 +167,8 @@ pub fn Deflate(comptime WriterType: type) type {
             var match: ?Token = null;
 
             // How much back-references to try, performance knob.
-            var chain: usize = level.chain;
-            if (len >= level.good) {
+            var chain: usize = self.level.chain;
+            if (len >= self.level.good) {
                 // If we've got a match that's good enough, only look in 1/4 the chain.
                 chain >>= 2;
             }
@@ -163,7 +181,7 @@ pub fn Deflate(comptime WriterType: type) type {
                 const new_len = self.win.match(prev_pos, pos, len);
                 if (new_len > len) {
                     match = Token.initMatch(@intCast(distance), new_len);
-                    if (new_len >= level.nice) {
+                    if (new_len >= self.level.nice) {
                         // The match is good enough that we don't try to find a better one.
                         return match;
                     }
@@ -259,7 +277,7 @@ test "deflate: tokenization" {
         var nw: TestTokenWriter = .{
             .expected = c.tokens,
         };
-        var df = deflateWriter(&nw);
+        var df = deflateWriter(&nw, .{});
         try df.compress(fbs.reader());
         try df.close();
         try expect(nw.pos == c.tokens.len);
@@ -428,12 +446,11 @@ test "check struct sizes" {
     try expect(@sizeOf(Hbw) == hbw_size);
 
     const D = Deflate(Hbw);
+    // 404744, 395.26k
+    // ?Token: 6, ?u8: 2, level: 8
+    try expect(@sizeOf(D) == tokens_size + lookup_size + window_size + hbw_size + 6 + 2 + 8);
 
-    // 404_736, 395.25k
-    // ?Token: 6, ?u8: 2
-    try expect(@sizeOf(D) == tokens_size + lookup_size + window_size + hbw_size + 6 + 2);
-
-    //print("Delfate size: {d}\n", .{@sizeOf(D)});
+    //print("Delfate size: {d} {d}\n", .{ @sizeOf(D), @sizeOf(LevelArgs) });
 }
 
 const Tokens = struct {
@@ -536,17 +553,17 @@ test "zlib compress file" {
     try zlib(input.reader(), output.writer());
 }
 
-pub fn gzip(reader: anytype, writer: anytype) !void {
+pub fn gzip(reader: anytype, writer: anytype, options: Options) !void {
     var ev = envelope(reader, writer, .gzip);
     try ev.header();
-    try deflate(ev.reader(), writer);
+    try deflate(ev.reader(), writer, options);
     try ev.footer();
 }
 
-pub fn zlib(reader: anytype, writer: anytype) !void {
+pub fn zlib(reader: anytype, writer: anytype, options: Options) !void {
     var ev = envelope(reader, writer, .zlib);
     try ev.header();
-    try deflate(ev.reader(), writer);
+    try deflate(ev.reader(), writer, options);
     try ev.footer();
 }
 
@@ -779,20 +796,4 @@ test "Lookup bulkAdd" {
 
     try testing.expectEqualSlices(u16, &h.head, &bh.head);
     try testing.expectEqualSlices(u16, &h.chain, &bh.chain);
-}
-
-test "vector" {
-    const nn = 32768;
-    var chain: [nn * 2]u16 = undefined;
-
-    var v1: @Vector(nn, u16) = chain[0..nn].*;
-    const v2: @Vector(nn, u16) = chain[nn..].*;
-    const v3: @Vector(nn, u16) = @splat(nn);
-
-    print("{d} {d}\n", .{ v1[0], v2[0] });
-    v1 = v2 -| v3;
-    print("{d} {d}\n", .{ v1[0], v2[0] });
-    chain[0..nn].* = v1;
-    //chain = v1;
-    print("{d} \n", .{chain[0]});
 }

@@ -104,3 +104,66 @@ Remove gzip extra header:
 gunzip -c large.tar.gz
 gzip -9n large.tar
 ```
+
+### Compression levels
+
+Compression levels are in range 4-9, 4 = fast, 6 = default, 9 = best.
+They have same compression parameters as [zlib](https://github.com/madler/zlib/blob/develop/deflate.c#L106) implementation. In zlib level 0 is store only, no compression. Levels 1-3 are using different algorithm, deflate_fast, without lazy matching.  
+For now only default lazy matching algorithm is implemented, so here compression levels start from 4. 
+ 
+
+```
+zig build -Doptimize=ReleaseSafe && hyperfine -r 1 --parameter-scan level 4 9 'zig-out/bin/deflate_bench -l {level}'
+Benchmark 1: zig-out/bin/deflate_bench -l 4
+  Time (abs ≡):         1.051 s               [User: 1.043 s, System: 0.008 s]
+
+Benchmark 2: zig-out/bin/deflate_bench -l 5
+  Time (abs ≡):         1.419 s               [User: 1.411 s, System: 0.008 s]
+
+Benchmark 3: zig-out/bin/deflate_bench -l 6
+  Time (abs ≡):         2.014 s               [User: 2.010 s, System: 0.004 s]
+
+Benchmark 4: zig-out/bin/deflate_bench -l 7
+  Time (abs ≡):         2.509 s               [User: 2.509 s, System: 0.000 s]
+
+Benchmark 5: zig-out/bin/deflate_bench -l 8
+  Time (abs ≡):         4.522 s               [User: 4.509 s, System: 0.012 s]
+
+Benchmark 6: zig-out/bin/deflate_bench -l 9
+  Time (abs ≡):         6.771 s               [User: 6.758 s, System: 0.012 s]
+
+Summary
+  zig-out/bin/deflate_bench -l 4 ran
+    1.35 times faster than zig-out/bin/deflate_bench -l 5
+    1.92 times faster than zig-out/bin/deflate_bench -l 6
+    2.39 times faster than zig-out/bin/deflate_bench -l 7
+    4.30 times faster than zig-out/bin/deflate_bench -l 8
+    6.44 times faster than zig-out/bin/deflate_bench -l 9
+```
+
+```
+$ for level in {4..9}; do; echo "\nlevel $level" && zig-out/bin/deflate_bench -l $level ; done
+
+level 4
+bytes: 26610463
+
+level 5
+bytes: 25230903
+
+level 6
+bytes: 24716208
+
+level 7
+bytes: 24572027
+
+level 8
+bytes: 24419444
+
+level 9
+bytes: 24370812
+```
+
+
+
+[Zlib compression levels](https://github.com/madler/zlib/blob/develop/deflate.c#L106)  
+[Go compression levels](https://github.com/ziglang/zig/blob/993a83081a975464d1201597cf6f4cb7f6735284/lib/std/compress/deflate/compressor.zig#L78)  
