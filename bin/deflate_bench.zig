@@ -2,21 +2,15 @@ const std = @import("std");
 const flate = @import("flate");
 const print = std.debug.print;
 
-const inputs = [3][]const u8{
-    @embedFile("benchdata/bb0f7d55e8c50e379fa9bdcb8758d89d08e0cc1f.tar"),
-    @embedFile("benchdata/2600.txt.utf-8"),
-    @embedFile("benchdata/large.tar"),
-};
-
 pub fn main() !void {
     if (readArgs() catch {
         std.process.exit(1);
     }) |opt| {
         switch (opt.output) {
             .dev_null => {
-                var nw = NullWriter.init();
-                try run(nw.writer(), opt);
-                print("bytes: {d}\n", .{nw.bytes});
+                var cw = std.io.countingWriter(std.io.null_writer);
+                try run(cw.writer(), opt);
+                print("bytes: {d}\n", .{cw.bytes_written});
             },
             .stdout => {
                 try run(std.io.getStdOut().writer(), opt);
@@ -31,7 +25,7 @@ pub fn main() !void {
 }
 
 pub fn run(output: anytype, opt: Options) !void {
-    const input = inputs[opt.input_index];
+    const input = opt.input_file.?.reader();
 
     if (opt.stdlib) {
         switch (opt.alg) {
@@ -42,12 +36,12 @@ pub fn run(output: anytype, opt: Options) !void {
             },
         }
     } else {
-        var fbs = std.io.fixedBufferStream(input);
+        //var fbs = std.io.fixedBufferStream(input);
         const f_opt: flate.Options = .{ .level = @enumFromInt(opt.level) };
         switch (opt.alg) {
-            .deflate => try flate.deflate(fbs.reader(), output, f_opt),
-            .zlib => try flate.zlib(fbs.reader(), output, f_opt),
-            .gzip => try flate.gzip(fbs.reader(), output, f_opt),
+            .deflate => try flate.deflate(input, output, f_opt),
+            .zlib => try flate.zlib(input, output, f_opt),
+            .gzip => try flate.gzip(input, output, f_opt),
         }
     }
 }
@@ -68,8 +62,10 @@ const Options = struct {
     output: OutputKind = .dev_null,
     output_file: ?std.fs.File = null,
 
+    input_file: ?std.fs.File = null,
+    //input_index: u8 = 0,
+
     stdlib: bool = false,
-    input_index: u8 = 0,
     alg: Algorithm = .deflate,
     level: u8 = 6,
 };
@@ -79,15 +75,14 @@ fn usage() void {
         \\benchmark [options]
         \\
         \\Options:
-        \\  -o <file_name>     output to the file
-        \\  -c                 write on standard output
-        \\  -i [0,1,2]         test file to use
-        \\  -s                 use Zig's std lib implementation
-        \\  -g                 gzip
-        \\  -z                 zlib
-        \\  -l [4-9]           compression level
-        \\  -h, --help         give this help
-        \\
+        \\  -o <output_file_name>     output to the file
+        \\  -c                        write on standard output
+        \\  -s                        use Zig's std lib implementation
+        \\  -g                        gzip
+        \\  -z                        zlib
+        \\  -l [4-9]                  compression level
+        \\  -h, --help                give this help
+        \\ <input_file_name>
     , .{});
 }
 
@@ -119,19 +114,6 @@ pub fn readArgs() !?Options {
             opt.stdlib = true;
             continue;
         }
-        if (std.mem.eql(u8, a, "-i")) {
-            if (args.next()) |i| {
-                opt.input_index = try std.fmt.parseInt(u8, i, 10);
-                if (opt.input_index >= inputs.len) {
-                    print("Input index must be in range 0-{d}!\n", .{inputs.len - 1});
-                    return error.InvalidArgs;
-                }
-            } else {
-                print("Missing input index after -i option!\n", .{});
-                return error.InvalidArgs;
-            }
-            continue;
-        }
         if (std.mem.eql(u8, a, "-l")) {
             if (args.next()) |i| {
                 opt.level = try std.fmt.parseInt(u8, i, 10);
@@ -157,52 +139,57 @@ pub fn readArgs() !?Options {
             usage();
             return null;
         }
-        print("Unknown argument {s}!\n", .{a});
-        return error.InvalidArgs;
+        if (a[0] == '-') {
+            print("Unknown argument {s}!\n", .{a});
+            return error.InvalidArgs;
+        }
+
+        const input_file_name = a;
+        opt.input_file = std.fs.cwd().openFile(input_file_name, .{}) catch |err| {
+            print("Fail to open input file '{s}'!\nError: {}\n", .{ input_file_name, err });
+            return err;
+        };
     }
+    if (opt.input_file == null) {
+        const input_file_name = "bench_data/ziglang.tar";
+        opt.input_file = std.fs.cwd().openFile(input_file_name, .{}) catch |err| {
+            print("Fail to open input file '{s}'!\nError: {}\n", .{ input_file_name, err });
+            return err;
+        };
+    }
+
     return opt;
 }
 
-pub fn stdZlib(input: []const u8, writer: anytype, opt: Options) !void {
+const read_buffer_len = 64 * 1024;
+const allocator = std.heap.page_allocator;
+
+pub fn stdZlib(reader: anytype, writer: anytype, opt: Options) !void {
     var z_opt: std.compress.zlib.CompressStreamOptions = .{ .level = .default };
     if (opt.level == 4) z_opt.level = .fastest;
     if (opt.level == 9) z_opt.level = .maximum;
 
-    const allocator = std.heap.page_allocator;
     var cmp = try std.compress.zlib.compressStream(allocator, writer, z_opt);
     defer cmp.deinit();
-
-    try cmp.writer().writeAll(input);
+    try stream(reader, cmp.writer());
     try cmp.finish();
 }
 
-pub fn stdDeflate(input: []const u8, writer: anytype, opt: Options) !void {
-    const allocator = std.heap.page_allocator;
+pub fn stdDeflate(reader: anytype, writer: anytype, opt: Options) !void {
     const c_opt = std.compress.deflate.CompressorOptions{ .level = @enumFromInt(opt.level) };
+
     var cmp = try std.compress.deflate.compressor(allocator, writer, c_opt);
     defer cmp.deinit();
-
-    try cmp.writer().writeAll(input);
-    try cmp.flush();
+    try stream(reader, cmp.writer());
+    try cmp.close();
 }
 
-const NullWriter = struct {
-    bytes: usize = 0,
-
-    const Self = @This();
-    pub const WriteError = error{};
-    pub const Writer = std.io.Writer(*Self, WriteError, write);
-
-    pub fn writer(self: *Self) Writer {
-        return .{ .context = self };
+fn stream(reader: anytype, writer: anytype) !void {
+    var buf: [read_buffer_len]u8 = undefined;
+    while (true) {
+        const n = try reader.readAll(&buf);
+        if (n == 0) break;
+        try writer.writeAll(buf[0..n]);
+        //if (n < buf.len) break;
     }
-
-    pub fn write(self: *Self, bytes: []const u8) WriteError!usize {
-        self.bytes += bytes.len;
-        return bytes.len;
-    }
-
-    pub fn init() Self {
-        return .{};
-    }
-};
+}

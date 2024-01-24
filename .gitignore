@@ -4,3 +4,4 @@ src/benchdata
 tmp
 /bin/benchdata/
 /output
+/bench_data/
