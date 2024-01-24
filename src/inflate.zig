@@ -4,7 +4,6 @@ const testing = std.testing;
 const Huffman = @import("huffman.zig").Huffman;
 const BitReader = @import("bit_reader.zig").BitReader;
 const SlidingWindow = @import("sliding_window.zig").SlidingWindow;
-//const SlidingWindow = @import("write_buffer.zig").Buffer;
 
 pub fn inflate(reader: anytype) Inflate(@TypeOf(reader)) {
     return Inflate(@TypeOf(reader)).init(reader);
@@ -66,9 +65,26 @@ fn Inflate(comptime ReaderType: type) type {
             const magic1 = try self.rdr.read(u8);
             const magic2 = try self.rdr.read(u8);
             const method = try self.rdr.read(u8);
-            try self.rdr.skipBytes(7); // flags, mtime(4), xflags, os
+            const flags = try self.rdr.read(u8);
+            try self.rdr.skipBytes(6); // mtime(4), xflags, os
             if (magic1 != 0x1f or magic2 != 0x8b or method != 0x08)
                 return error.InvalidGzipHeader;
+            // Flags description: https://www.rfc-editor.org/rfc/rfc1952.html#page-5
+            if (flags != 0) {
+                if (flags & 0b0000_0100 != 0) { // FEXTRA
+                    const extra_len = try self.rdr.read(u16);
+                    try self.rdr.skipBytes(extra_len);
+                }
+                if (flags & 0b0000_1000 != 0) { // FNAME
+                    try self.rdr.skipStringZ();
+                }
+                if (flags & 0b0001_0000 != 0) { // FCOMMENT
+                    try self.rdr.skipStringZ();
+                }
+                if (flags & 0b0000_0010 != 0) { // FHCRC
+                    try self.rdr.skipBytes(2);
+                }
+            }
         }
 
         fn gzipFooter(self: *Self) !void {
@@ -419,6 +435,15 @@ test "inflate test cases" {
                 0x17, 0x1c, 0x39, 0xb4, 0x13, 0x00, 0x00, 0x00, // gzip footer (chksum, len)
             },
             .out = "ABCDEABCD ABCDEABCD",
+        },
+        // gzip header with name
+        .{
+            .in = &[_]u8{
+                0x1f, 0x8b, 0x08, 0x08, 0xe5, 0x70, 0xb1, 0x65, 0x00, 0x03, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x2e,
+                0x74, 0x78, 0x74, 0x00, 0xf3, 0x48, 0xcd, 0xc9, 0xc9, 0x57, 0x28, 0xcf, 0x2f, 0xca, 0x49, 0xe1,
+                0x02, 0x00, 0xd5, 0xe0, 0x39, 0xb7, 0x0c, 0x00, 0x00, 0x00,
+            },
+            .out = "Hello world\n",
         },
     };
     for (cases) |c| {

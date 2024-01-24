@@ -122,7 +122,7 @@ pub fn BitReader(comptime ReaderType: type) type {
             self.eos -= n;
         }
 
-        pub inline fn skipBytes(self: *Self, n: u3) !void {
+        pub inline fn skipBytes(self: *Self, n: u16) !void {
             for (0..n) |_| {
                 try self.ensureBits(8, 8);
                 self.advance(8);
@@ -138,6 +138,13 @@ pub fn BitReader(comptime ReaderType: type) type {
         pub inline fn alignToByte(self: *Self) void {
             const ab = self.alignBits();
             if (ab > 0) self.advance(ab);
+        }
+
+        // Skip zero terminated string.
+        pub fn skipStringZ(self: *Self) !void {
+            while (true) {
+                if (try self.read(u8) == 0) break;
+            }
         }
     };
 }
