@@ -95,7 +95,7 @@ pub fn build(b: *std.Build) void {
     // b.installArtifact(bench);
 
     const flate_module = b.addModule("flate", .{
-        .source_file = .{ .path = "src/root.zig" },
+        .root_source_file = .{ .path = "src/root.zig" },
     });
 
     const bins = [_]struct {
@@ -103,7 +103,7 @@ pub fn build(b: *std.Build) void {
         src: []const u8,
     }{
         .{ .name = "deflate_bench", .src = "bin/deflate_bench.zig" },
-        .{ .name = "inflate_bench", .src = "bin/inflate_bench.zig" },
+        //.{ .name = "inflate_bench", .src = "bin/inflate_bench.zig" },
         .{ .name = "gzip", .src = "bin/gzip.zig" },
     };
 
@@ -114,7 +114,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
         });
-        bin.addModule("flate", flate_module);
+        bin.root_module.addImport("flate", flate_module);
         b.installArtifact(bin);
     }
 }
