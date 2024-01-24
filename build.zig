@@ -29,41 +29,6 @@ pub fn build(b: *std.Build) void {
     // running `zig build`).
     b.installArtifact(lib);
 
-    // const exe = b.addExecutable(.{
-    //     .name = "deflate",
-    //     .root_source_file = .{ .path = "src/main.zig" },
-    //     .target = target,
-    //     .optimize = optimize,
-    // });
-
-    // // This declares intent for the executable to be installed into the
-    // // standard location when the user invokes the "install" step (the default
-    // // step when running `zig build`).
-    // b.installArtifact(exe);
-
-    // This *creates* a Run step in the build graph, to be executed when another
-    // step is evaluated that depends on it. The next line below will establish
-    // such a dependency.
-    //const run_cmd = b.addRunArtifact(exe);
-
-    // By making the run step depend on the install step, it will be run from the
-    // installation directory rather than directly from within the cache directory.
-    // This is not necessary, however, if the application depends on other installed
-    // files, this ensures they will be present and in the expected location.
-    //run_cmd.step.dependOn(b.getInstallStep());
-
-    // This allows the user to pass arguments to the application in the build
-    // // command itself, like this: `zig build run -- arg1 arg2 etc`
-    // if (b.args) |args| {
-    //     run_cmd.addArgs(args);
-    // }
-
-    // This creates a build step. It will be visible in the `zig build --help` menu,
-    // and can be selected like this: `zig build run`
-    // This will evaluate the `run` step rather than the default, which is "install".
-    // const run_step = b.step("run", "Run the app");
-    // run_step.dependOn(&run_cmd.step);
-
     // Creates a step for unit testing. This only builds the test executable
     // but does not run it.
     const lib_unit_tests = b.addTest(.{
@@ -74,40 +39,17 @@ pub fn build(b: *std.Build) void {
 
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
 
-    // const exe_unit_tests = b.addTest(.{
-    //     .root_source_file = .{ .path = "src/root.zig" },
-    //     .target = target,
-    //     .optimize = optimize,
-    // });
-
-    // const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
-
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
-    //test_step.dependOn(&run_exe_unit_tests.step);
-
-    // const bench = b.addExecutable(.{
-    //     .name = "benchmark",
-    //     .root_source_file = .{ .path = "src/benchmark.zig" },
-    //     .target = target,
-    //     .optimize = optimize,
-    // });
-    // b.installArtifact(bench);
 
     const flate_module = b.addModule("flate", .{
         .root_source_file = .{ .path = "src/root.zig" },
     });
 
-    const bins = [_]struct {
-        name: []const u8,
-        src: []const u8,
-    }{
-        .{ .name = "deflate_bench", .src = "bin/deflate_bench.zig" },
-        //.{ .name = "inflate_bench", .src = "bin/inflate_bench.zig" },
+    const binaries = [_]Binary{
         .{ .name = "gzip", .src = "bin/gzip.zig" },
     };
-
-    for (bins) |i| {
+    for (binaries) |i| {
         const bin = b.addExecutable(.{
             .name = i.name,
             .root_source_file = .{ .path = i.src },
@@ -117,4 +59,31 @@ pub fn build(b: *std.Build) void {
         bin.root_module.addImport("flate", flate_module);
         b.installArtifact(bin);
     }
+
+    // Benchmarks are embedding bin/bench_data files which has to be present.
+    // There is script `get_bench_data.sh` to fill the folder. Some of those
+    // files are pretty big so it is not committed to the repo. If you are
+    // building many times clear your zig-cache because it can be filled with
+    // lots of copies of this files embedded into binaries.
+    const bench_step = b.step("bench", "Build benchhmarks");
+
+    const benchmarks = [_]Binary{
+        .{ .name = "deflate_bench", .src = "bin/deflate_bench.zig" },
+        .{ .name = "inflate_bench", .src = "bin/inflate_bench.zig" },
+    };
+    for (benchmarks) |i| {
+        var bin = b.addExecutable(.{
+            .name = i.name,
+            .root_source_file = .{ .path = i.src },
+            .target = target,
+            .optimize = optimize,
+        });
+        bin.root_module.addImport("flate", flate_module);
+        bench_step.dependOn(&b.addInstallArtifact(bin, .{}).step);
+    }
 }
+
+const Binary = struct {
+    name: []const u8,
+    src: []const u8,
+};
