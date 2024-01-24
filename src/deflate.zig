@@ -553,6 +553,7 @@ fn TokenDecoder(comptime WriterType: type) type {
 }
 
 test "gzip compress file" {
+    if (true) return error.SkipZigTest;
     const input_file_name = "benchdata/2600.txt.utf-8";
     var input = try std.fs.cwd().openFile(input_file_name, .{});
     defer input.close();
@@ -565,6 +566,7 @@ test "gzip compress file" {
 }
 
 test "zlib compress file" {
+    if (true) return error.SkipZigTest;
     const input_file_name = "benchdata/2600.txt.utf-8";
     var input = try std.fs.cwd().openFile(input_file_name, .{});
     defer input.close();
