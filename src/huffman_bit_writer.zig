@@ -638,7 +638,6 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
             num_codegens = dynamic_size.num_codegens;
 
             // Store bytes, if we don't get a reasonable improvement.
-
             const stored_size_ret = storedSizeFits(input);
             const ssize = stored_size_ret.size;
             const storable = stored_size_ret.storable;
@@ -651,34 +650,11 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
             // Huffman.
             try self.writeDynamicHeader(num_literals, num_offsets, num_codegens, eof);
             const encoding = self.literal_encoding.codes[0..257];
-            var n = self.nbytes;
+
             for (input) |t| {
-                // Bitwriting inlined, ~30% speedup
                 const c = encoding[t];
-                self.bits |= @as(u64, @intCast(c.code)) << @as(u6, @intCast(self.nbits));
-                self.nbits += @as(u32, @intCast(c.len));
-                if (self.nbits < 48) {
-                    continue;
-                }
-                // Store 6 bytes
-                const bits = self.bits;
-                self.bits >>= 48;
-                self.nbits -= 48;
-                var bytes = self.bytes[n..][0..6];
-                bytes[0] = @as(u8, @truncate(bits));
-                bytes[1] = @as(u8, @truncate(bits >> 8));
-                bytes[2] = @as(u8, @truncate(bits >> 16));
-                bytes[3] = @as(u8, @truncate(bits >> 24));
-                bytes[4] = @as(u8, @truncate(bits >> 32));
-                bytes[5] = @as(u8, @truncate(bits >> 40));
-                n += 6;
-                if (n < buffer_flush_size) {
-                    continue;
-                }
-                try self.write(self.bytes[0..n]);
-                n = 0;
+                try self.writeBits(c.code, c.len);
             }
-            self.nbytes = n;
             try self.writeCode(encoding[consts.end_block_marker]);
         }
     };
