@@ -466,6 +466,14 @@ test "check struct sizes" {
     try expect(@sizeOf(D) == tokens_size + lookup_size + window_size + hbw_size + 6 + 2 + 8);
 
     //print("Delfate size: {d} {d}\n", .{ @sizeOf(D), @sizeOf(LevelArgs) });
+
+    // current std lib deflate allocation:
+    // 797_901, 779.2k
+    // measured with:
+    // var la = std.heap.logToWriterAllocator(testing.allocator, std.io.getStdOut().writer());
+    // const allocator = la.allocator();
+    // var cmp = try std.compress.deflate.compressor(allocator, std.io.null_writer, .{});
+    // defer cmp.deinit();
 }
 
 const Tokens = struct {
