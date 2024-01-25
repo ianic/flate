@@ -1,5 +1,5 @@
 const std = @import("std");
-const flate = @import("flate");
+const gzip = @import("flate").gzip;
 
 // Comparable to standard gzip with -kf flags:
 // $ gzip -kfn <file_name>
@@ -17,6 +17,6 @@ pub fn main() !void {
         var output_file = try std.fs.cwd().createFile(output_file_name, .{ .truncate = true });
         defer output_file.close();
 
-        try flate.gzip(input_file.reader(), output_file.writer(), .{});
+        try gzip.compress(input_file.reader(), output_file.writer(), .{});
     }
 }

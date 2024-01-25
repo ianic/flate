@@ -1,8 +1,8 @@
 const std = @import("std");
 const flate = @import("flate");
-const inflate = flate.inflate;
-const print = std.debug.print;
+const gzip = flate.gzip;
 
+const print = std.debug.print;
 const assert = std.debug.assert;
 
 const cases = [_]struct {
@@ -153,13 +153,17 @@ fn setInputFile(file_name: []const u8, opt: *Options) !void {
 // }
 
 fn thisLib(input: anytype) !usize {
-    var inf = inflate(input);
-    var n: usize = 0;
+    var cw = std.io.countingWriter(std.io.null_writer);
+    try gzip.decompress(input, cw.writer());
+    return cw.bytes_written;
 
-    while (try inf.nextChunk()) |buf| {
-        n += buf.len;
-    }
-    return n;
+    // var inf = inflate(input);
+    // var n: usize = 0;
+
+    // while (try inf.nextChunk()) |buf| {
+    //     n += buf.len;
+    // }
+    // return n;
 }
 
 // fn readerInterface() !void {

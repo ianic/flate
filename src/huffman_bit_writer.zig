@@ -1,12 +1,12 @@
 const std = @import("std");
 const io = std.io;
 
-const consts = @import("consts.zig");
 const hc = @import("huffman_code.zig");
 const Token = @import("Token.zig");
+const consts = @import("consts.zig");
+const codegen_order = consts.huffman.codegen_order;
+const codegen_code_count = consts.huffman.codegen_code_count;
 
-// The number of codegen codes.
-const codegen_code_count = 19;
 const bad_code = 255;
 
 // buffer_flush_size indicates the buffer size
@@ -19,9 +19,6 @@ const buffer_flush_size = 240;
 // It must have additional headroom for a flush
 // which can contain up to 8 bytes.
 const buffer_size = buffer_flush_size + 8;
-
-// The odd order in which the codegen code sizes are written.
-var codegen_order = [_]u32{ 16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15 };
 
 pub fn HuffmanBitWriter(comptime WriterType: type) type {
     return struct {

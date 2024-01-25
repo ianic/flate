@@ -1,5 +1,8 @@
 const std = @import("std");
 const flate = @import("flate");
+const gzip = flate.gzip;
+const zlib = flate.zlib;
+
 const print = std.debug.print;
 
 pub fn main() !void {
@@ -39,9 +42,9 @@ pub fn run(output: anytype, opt: Options) !void {
         //var fbs = std.io.fixedBufferStream(input);
         const f_opt: flate.Options = .{ .level = @enumFromInt(opt.level) };
         switch (opt.alg) {
-            .deflate => try flate.deflate(input, output, f_opt),
-            .zlib => try flate.zlib(input, output, f_opt),
-            .gzip => try flate.gzip(input, output, f_opt),
+            .deflate => try flate.compress(input, output, f_opt),
+            .zlib => try zlib.compress(input, output, f_opt),
+            .gzip => try gzip.compress(input, output, f_opt),
         }
     }
 }

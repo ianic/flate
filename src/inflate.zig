@@ -4,6 +4,44 @@ const testing = std.testing;
 const Huffman = @import("huffman.zig").Huffman;
 const BitReader = @import("bit_reader.zig").BitReader;
 const SlidingWindow = @import("sliding_window.zig").SlidingWindow;
+const consts = @import("consts.zig");
+
+pub const gzip = struct {
+    pub fn decompress(input_reader: anytype, output_writer: anytype) !void {
+        try decompressWrapped(.gzip, input_reader, output_writer);
+    }
+
+    // pub fn compress(input_reader: anytype, output_writer: anytype, options: deflate.Options) !void {}
+
+    // pub fn reader(underlaying_reader: anytype) type {}
+
+    // pub fn writer(underlaying_writer: anytype) type {}
+};
+
+pub const zlib = struct {
+    pub fn decompress(input_reader: anytype, output_writer: anytype) !void {
+        try decompressWrapped(.zlib, input_reader, output_writer);
+    }
+};
+
+pub fn decompressWrapped(comptime wrap: Wrapping, input_reader: anytype, output_writer: anytype) !void {
+    var inf = inflate(input_reader);
+    // TODO: ovaj &inf.rdr mozda i nije najsretnije rjesenje
+    var wrp = wrapper(wrap, &inf.rdr, output_writer);
+    try wrp.parseHeader();
+    var writer = wrp.writer();
+    while (try inf.nextChunk()) |buf| {
+        try writer.writeAll(buf);
+    }
+    try wrp.parseFooter();
+}
+
+pub fn decompress(input_reader: anytype, output_writer: anytype) !void {
+    var inf = inflate(input_reader);
+    while (try inf.nextChunk()) |buf| {
+        try output_writer.writeAll(buf);
+    }
+}
 
 pub fn inflate(reader: anytype) Inflate(@TypeOf(reader)) {
     return Inflate(@TypeOf(reader)).init(reader);
@@ -27,13 +65,11 @@ fn Inflate(comptime ReaderType: type) type {
         // current read state
         bfinal: u1 = 0,
         block_type: u2 = 0b11,
-        state: ReadState = .gzip_header,
+        state: ReadState = .header,
 
         const ReadState = enum {
-            gzip_header,
-            deflate_header,
-            deflate_block,
-            gzip_footer,
+            header,
+            block,
             end,
         };
 
@@ -61,40 +97,40 @@ fn Inflate(comptime ReaderType: type) type {
                 bd.base_distance + self.rdr.readBufferedBits(bd.extra_bits);
         }
 
-        fn gzipHeader(self: *Self) !void {
-            const magic1 = try self.rdr.read(u8);
-            const magic2 = try self.rdr.read(u8);
-            const method = try self.rdr.read(u8);
-            const flags = try self.rdr.read(u8);
-            try self.rdr.skipBytes(6); // mtime(4), xflags, os
-            if (magic1 != 0x1f or magic2 != 0x8b or method != 0x08)
-                return error.InvalidGzipHeader;
-            // Flags description: https://www.rfc-editor.org/rfc/rfc1952.html#page-5
-            if (flags != 0) {
-                if (flags & 0b0000_0100 != 0) { // FEXTRA
-                    const extra_len = try self.rdr.read(u16);
-                    try self.rdr.skipBytes(extra_len);
-                }
-                if (flags & 0b0000_1000 != 0) { // FNAME
-                    try self.rdr.skipStringZ();
-                }
-                if (flags & 0b0001_0000 != 0) { // FCOMMENT
-                    try self.rdr.skipStringZ();
-                }
-                if (flags & 0b0000_0010 != 0) { // FHCRC
-                    try self.rdr.skipBytes(2);
-                }
-            }
-        }
+        // fn gzipHeader(self: *Self) !void {
+        //     const magic1 = try self.rdr.read(u8);
+        //     const magic2 = try self.rdr.read(u8);
+        //     const method = try self.rdr.read(u8);
+        //     const flags = try self.rdr.read(u8);
+        //     try self.rdr.skipBytes(6); // mtime(4), xflags, os
+        //     if (magic1 != 0x1f or magic2 != 0x8b or method != 0x08)
+        //         return error.InvalidGzipHeader;
+        //     // Flags description: https://www.rfc-editor.org/rfc/rfc1952.html#page-5
+        //     if (flags != 0) {
+        //         if (flags & 0b0000_0100 != 0) { // FEXTRA
+        //             const extra_len = try self.rdr.read(u16);
+        //             try self.rdr.skipBytes(extra_len);
+        //         }
+        //         if (flags & 0b0000_1000 != 0) { // FNAME
+        //             try self.rdr.skipStringZ();
+        //         }
+        //         if (flags & 0b0001_0000 != 0) { // FCOMMENT
+        //             try self.rdr.skipStringZ();
+        //         }
+        //         if (flags & 0b0000_0010 != 0) { // FHCRC
+        //             try self.rdr.skipBytes(2);
+        //         }
+        //     }
+        // }
 
-        fn gzipFooter(self: *Self) !void {
-            self.rdr.alignToByte();
-            const chksum = try self.rdr.read(u32);
-            const size = try self.rdr.read(u32);
+        // fn gzipFooter(self: *Self) !void {
+        //     self.rdr.alignToByte();
+        //     const chksum = try self.rdr.read(u32);
+        //     const size = try self.rdr.read(u32);
 
-            if (chksum != self.win.chksum()) return error.GzipFooterChecksum;
-            if (size != self.win.size()) return error.GzipFooterSize;
-        }
+        //     if (chksum != self.win.chksum()) return error.GzipFooterChecksum;
+        //     if (size != self.win.size()) return error.GzipFooterSize;
+        // }
 
         fn nonCompressedBlock(self: *Self) !bool {
             self.rdr.alignToByte(); // skip 5 bits
@@ -107,10 +143,6 @@ fn Inflate(comptime ReaderType: type) type {
                 try self.rdr.readAll(buf);
                 len -= @intCast(buf.len);
             }
-
-            // for (0..len) |_| {
-            //     self.win.write(try self.rdr.read(u8));
-            // }
             return true;
         }
 
@@ -159,7 +191,7 @@ fn Inflate(comptime ReaderType: type) type {
 
             // lengths for code lengths
             var cl_l = [_]u4{0} ** 19;
-            const order = [_]u8{ 16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15 };
+            const order = consts.huffman.codegen_order;
             for (0..hclen) |i| {
                 cl_l[order[i]] = try self.rdr.read(u3);
             }
@@ -189,7 +221,8 @@ fn Inflate(comptime ReaderType: type) type {
 
         fn dynamicBlock(self: *Self) !bool {
             while (!self.windowFull()) {
-                const sym = self.lit_h.find(try self.rdr.peekCode(u15));
+                try self.rdr.ensureBits(15, 2);
+                const sym = self.lit_h.find(self.rdr.peekBufferedCode(u15));
                 self.rdr.advance(sym.code_bits);
 
                 if (sym.kind == .literal) {
@@ -242,29 +275,26 @@ fn Inflate(comptime ReaderType: type) type {
 
         fn step(self: *Self) Error!void {
             switch (self.state) {
-                .gzip_header => {
-                    try self.gzipHeader();
-                    self.state = .deflate_header;
-                },
-                .deflate_header => {
+                .header => {
                     self.bfinal = try self.rdr.read(u1);
                     self.block_type = try self.rdr.read(u2);
-                    self.state = .deflate_block;
+                    self.state = .block;
                     if (self.block_type == 2) try self.initDynamicBlock();
                 },
-                .deflate_block => {
+                .block => {
                     const done = switch (self.block_type) {
                         0 => try self.nonCompressedBlock(),
                         1 => try self.fixedBlock(),
                         2 => try self.dynamicBlock(),
                         else => unreachable,
                     };
-                    if (done)
-                        self.state = if (self.bfinal == 1) .gzip_footer else .deflate_header;
-                },
-                .gzip_footer => {
-                    try self.gzipFooter();
-                    self.state = .end;
+                    if (done) {
+                        self.state = .header;
+                        if (self.bfinal == 1) {
+                            self.rdr.alignToByte();
+                            self.state = .end;
+                        }
+                    }
                 },
                 .end => {},
             }
@@ -286,13 +316,7 @@ fn Inflate(comptime ReaderType: type) type {
 
         // reader interface implementation
 
-        pub const Error = ReaderType.Error || error{
-            EndOfStream,
-            InvalidGzipHeader,
-            GzipFooterSize,
-            GzipFooterChecksum,
-            DeflateWrongNlen,
-        };
+        pub const Error = ReaderType.Error || error{ EndOfStream, DeflateWrongNlen };
         pub const Reader = std.io.Reader(*Self, Error, read);
 
         /// Returns the number of bytes read. It may be less than buffer.len.
@@ -399,7 +423,48 @@ const backward_distances = [_]BackwardDistance{
     .{ .extra_bits = 13, .base_distance = 24577 }, // code = 29
 };
 
-test "inflate test cases" {
+test "flate decompress" {
+    const cases = [_]struct {
+        in: []const u8,
+        out: []const u8,
+    }{
+        // non compressed block (type 0)
+        .{
+            .in = &[_]u8{
+                0b0000_0001, 0b0000_1100, 0x00, 0b1111_0011, 0xff, // deflate fixed buffer header len, nlen
+                'H', 'e', 'l', 'l', 'o', ' ', 'w', 'o', 'r', 'l', 'd', 0x0a, // non compressed data
+            },
+            .out = "Hello world\n",
+        },
+        // fixed code block (type 1)
+        .{
+            .in = &[_]u8{
+                0xf3, 0x48, 0xcd, 0xc9, 0xc9, 0x57, 0x28, 0xcf, // deflate data block type 1
+                0x2f, 0xca, 0x49, 0xe1, 0x02, 0x00,
+            },
+            .out = "Hello world\n",
+        },
+        // dynamic block (type 2)
+        .{
+            .in = &[_]u8{
+                0x3d, 0xc6, 0x39, 0x11, 0x00, 0x00, 0x0c, 0x02, // deflate data block type 2
+                0x30, 0x2b, 0xb5, 0x52, 0x1e, 0xff, 0x96, 0x38,
+                0x16, 0x96, 0x5c, 0x1e, 0x94, 0xcb, 0x6d, 0x01,
+            },
+            .out = "ABCDEABCD ABCDEABCD",
+        },
+    };
+    for (cases) |c| {
+        var fb = std.io.fixedBufferStream(c.in);
+        var al = std.ArrayList(u8).init(testing.allocator);
+        defer al.deinit();
+
+        try decompress(fb.reader(), al.writer());
+        try testing.expectEqualStrings(c.out, al.items);
+    }
+}
+
+test "gzip decompress" {
     const cases = [_]struct {
         in: []const u8,
         out: []const u8,
@@ -448,9 +513,157 @@ test "inflate test cases" {
     };
     for (cases) |c| {
         var fb = std.io.fixedBufferStream(c.in);
-        var il = inflate(fb.reader());
+        var al = std.ArrayList(u8).init(testing.allocator);
+        defer al.deinit();
 
-        try testing.expectEqualStrings(c.out, (try il.nextChunk()).?);
-        try testing.expect((try il.nextChunk()) == null);
+        try gzip.decompress(fb.reader(), al.writer());
+        try testing.expectEqualStrings(c.out, al.items);
     }
+}
+
+test "zlib decompress" {
+    const cases = [_]struct {
+        in: []const u8,
+        out: []const u8,
+    }{
+        // non compressed block (type 0)
+        .{
+            .in = &[_]u8{
+                0x78, 0b10_0_11100, // zlib header (2 bytes)
+                0b0000_0001, 0b0000_1100, 0x00, 0b1111_0011, 0xff, // deflate fixed buffer header len, nlen
+                'H', 'e', 'l', 'l', 'o', ' ', 'w', 'o', 'r', 'l', 'd', 0x0a, // non compressed data
+                0x47, 0x04, 0xf2, 0x1c, // zlib footer: checksum
+            },
+            .out = "Hello world\n",
+        },
+    };
+    for (cases) |c| {
+        var fb = std.io.fixedBufferStream(c.in);
+        var al = std.ArrayList(u8).init(testing.allocator);
+        defer al.deinit();
+
+        try zlib.decompress(fb.reader(), al.writer());
+        try testing.expectEqualStrings(c.out, al.items);
+    }
+}
+
+const Wrapping = enum {
+    raw, // no header or footer
+    gzip, // gzip header and footer
+    zlib, // zlib header and footer
+};
+
+fn wrapper(comptime wrap: Wrapping, reader: anytype, writer: anytype) Wrapper(wrap, @TypeOf(reader), @TypeOf(writer)) {
+    return Wrapper(wrap, @TypeOf(reader), @TypeOf(writer)){
+        .rdr = reader,
+        .wrt = writer,
+    };
+}
+
+fn Wrapper(wrap: Wrapping, comptime ReaderType: type, comptime WriterType: type) type {
+    const HasherType = switch (wrap) {
+        .gzip => std.hash.Crc32,
+        .zlib => std.hash.Adler32,
+        .raw => unreachable,
+    };
+
+    return struct {
+        hasher: HasherType = HasherType.init(),
+        rdr: ReaderType,
+        wrt: WriterType,
+        bytes: usize = 0,
+
+        const Self = @This();
+
+        pub const ReadError = ReaderType.Error;
+        pub const Reader = std.io.Reader(*Self, ReadError, read);
+        pub fn reader(self: *Self) Reader {
+            return .{ .context = self };
+        }
+        pub fn read(self: *Self, buf: []u8) ReadError!usize {
+            const n = try self.rw.read(buf);
+            self.hasher.update(buf[0..n]);
+            self.bytes += n;
+            return n;
+        }
+
+        pub const WriteError = WriterType.Error;
+        pub const Writer = std.io.Writer(*Self, WriteError, write);
+        pub fn writer(self: *Self) Writer {
+            return .{ .context = self };
+        }
+        pub fn write(self: *Self, buf: []const u8) WriteError!usize {
+            const n = try self.wrt.write(buf);
+            self.hasher.update(buf[0..n]);
+            self.bytes += n;
+            return n;
+        }
+
+        pub fn chksum(self: *Self) u32 {
+            return self.hasher.final();
+        }
+
+        pub fn bytesRead(self: *Self) u32 {
+            return @truncate(self.bytes);
+        }
+
+        pub fn parseHeader(self: *Self) !void {
+            switch (wrap) {
+                .gzip => try self.parseGzipHeader(),
+                .zlib => try self.parseZlibHeader(),
+                .raw => unreachable,
+            }
+        }
+
+        pub fn parseFooter(self: *Self) !void {
+            switch (wrap) {
+                .gzip => try self.parseGzipFooter(),
+                .zlib => try self.parseZlibFooter(),
+                .raw => unreachable,
+            }
+        }
+
+        pub fn parseGzipHeader(self: *Self) !void {
+            const magic1 = try self.rdr.read(u8);
+            const magic2 = try self.rdr.read(u8);
+            const method = try self.rdr.read(u8);
+            const flags = try self.rdr.read(u8);
+            try self.rdr.skipBytes(6); // mtime(4), xflags, os
+            if (magic1 != 0x1f or magic2 != 0x8b or method != 0x08)
+                return error.InvalidGzipHeader;
+            // Flags description: https://www.rfc-editor.org/rfc/rfc1952.html#page-5
+            if (flags != 0) {
+                if (flags & 0b0000_0100 != 0) { // FEXTRA
+                    const extra_len = try self.rdr.read(u16);
+                    try self.rdr.skipBytes(extra_len);
+                }
+                if (flags & 0b0000_1000 != 0) { // FNAME
+                    try self.rdr.skipStringZ();
+                }
+                if (flags & 0b0001_0000 != 0) { // FCOMMENT
+                    try self.rdr.skipStringZ();
+                }
+                if (flags & 0b0000_0010 != 0) { // FHCRC
+                    try self.rdr.skipBytes(2);
+                }
+            }
+        }
+
+        pub fn parseZlibHeader(self: *Self) !void {
+            const cinfo_cm = try self.rdr.read(u8);
+            _ = try self.rdr.read(u8);
+            if (cinfo_cm != 0x78) {
+                return error.InvalidZlibHeader;
+            }
+        }
+
+        pub fn parseGzipFooter(self: *Self) !void {
+            if (try self.rdr.read(u32) != self.chksum()) return error.GzipFooterChecksum;
+            if (try self.rdr.read(u32) != self.bytesRead()) return error.GzipFooterSize;
+        }
+
+        pub fn parseZlibFooter(self: *Self) !void {
+            if (try self.rdr.read(u32) != self.chksum()) return error.ZlibFooterChecksum;
+        }
+    };
 }
