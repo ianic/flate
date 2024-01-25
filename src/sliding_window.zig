@@ -20,7 +20,6 @@ pub const SlidingWindow = struct {
     buffer: [buffer_len]u8 = undefined,
     wp: usize = 0, // write position
     rp: usize = 0, // read position
-    crc: std.hash.Crc32 = std.hash.Crc32.init(),
 
     pub inline fn writeAll(self: *SlidingWindow, buf: []const u8) void {
         for (buf) |c| self.write(c);
@@ -81,9 +80,7 @@ pub const SlidingWindow = struct {
     pub fn readAtMost(self: *SlidingWindow, max: usize) []const u8 {
         const rb = self.readBlock(max);
         defer self.rp += rb.len;
-        const buf = self.buffer[rb.head..rb.tail];
-        self.crc.update(buf);
-        return buf;
+        return self.buffer[rb.head..rb.tail];
     }
 
     const ReadBlock = struct {
@@ -110,16 +107,6 @@ pub const SlidingWindow = struct {
     // Number of free bytes for write.
     pub inline fn free(self: *SlidingWindow) usize {
         return buffer_len - (self.wp - self.rp);
-    }
-
-    // Checksum of all read bytes.
-    pub fn chksum(self: *SlidingWindow) u32 {
-        return self.crc.final();
-    }
-
-    // Number of bytes written.
-    pub fn size(self: *SlidingWindow) u32 {
-        return @intCast(self.wp);
     }
 };
 
