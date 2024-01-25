@@ -5,29 +5,20 @@ const Huffman = @import("huffman.zig").Huffman;
 const BitReader = @import("bit_reader.zig").BitReader;
 const SlidingWindow = @import("sliding_window.zig").SlidingWindow;
 const consts = @import("consts.zig");
+const wrapper = @import("wrapper.zig");
 
-pub const gzip = struct {
-    pub fn decompress(input_reader: anytype, output_writer: anytype) !void {
-        try decompressWrapped(.gzip, input_reader, output_writer);
-    }
+pub fn gzip(input_reader: anytype, output_writer: anytype) !void {
+    try decompressWrapped(.gzip, input_reader, output_writer);
+}
 
-    // pub fn compress(input_reader: anytype, output_writer: anytype, options: deflate.Options) !void {}
+pub fn zlib(input_reader: anytype, output_writer: anytype) !void {
+    try decompressWrapped(.zlib, input_reader, output_writer);
+}
 
-    // pub fn reader(underlaying_reader: anytype) type {}
-
-    // pub fn writer(underlaying_writer: anytype) type {}
-};
-
-pub const zlib = struct {
-    pub fn decompress(input_reader: anytype, output_writer: anytype) !void {
-        try decompressWrapped(.zlib, input_reader, output_writer);
-    }
-};
-
-pub fn decompressWrapped(comptime wrap: Wrapping, input_reader: anytype, output_writer: anytype) !void {
-    var inf = inflate(input_reader);
+pub fn decompressWrapped(comptime kind: wrapper.Kind, input_reader: anytype, output_writer: anytype) !void {
+    var inf = inflateReader(input_reader);
     // TODO: ovaj &inf.rdr mozda i nije najsretnije rjesenje
-    var wrp = wrapper(wrap, &inf.rdr, output_writer);
+    var wrp = wrapper.init(kind, &inf.rdr, output_writer);
     try wrp.parseHeader();
     var writer = wrp.writer();
     while (try inf.nextChunk()) |buf| {
@@ -37,13 +28,13 @@ pub fn decompressWrapped(comptime wrap: Wrapping, input_reader: anytype, output_
 }
 
 pub fn decompress(input_reader: anytype, output_writer: anytype) !void {
-    var inf = inflate(input_reader);
+    var inf = inflateReader(input_reader);
     while (try inf.nextChunk()) |buf| {
         try output_writer.writeAll(buf);
     }
 }
 
-pub fn inflate(reader: anytype) Inflate(@TypeOf(reader)) {
+pub fn inflateReader(reader: anytype) Inflate(@TypeOf(reader)) {
     return Inflate(@TypeOf(reader)).init(reader);
 }
 
@@ -516,7 +507,7 @@ test "gzip decompress" {
         var al = std.ArrayList(u8).init(testing.allocator);
         defer al.deinit();
 
-        try gzip.decompress(fb.reader(), al.writer());
+        try gzip(fb.reader(), al.writer());
         try testing.expectEqualStrings(c.out, al.items);
     }
 }
@@ -542,128 +533,7 @@ test "zlib decompress" {
         var al = std.ArrayList(u8).init(testing.allocator);
         defer al.deinit();
 
-        try zlib.decompress(fb.reader(), al.writer());
+        try zlib(fb.reader(), al.writer());
         try testing.expectEqualStrings(c.out, al.items);
     }
-}
-
-const Wrapping = enum {
-    raw, // no header or footer
-    gzip, // gzip header and footer
-    zlib, // zlib header and footer
-};
-
-fn wrapper(comptime wrap: Wrapping, reader: anytype, writer: anytype) Wrapper(wrap, @TypeOf(reader), @TypeOf(writer)) {
-    return Wrapper(wrap, @TypeOf(reader), @TypeOf(writer)){
-        .rdr = reader,
-        .wrt = writer,
-    };
-}
-
-fn Wrapper(wrap: Wrapping, comptime ReaderType: type, comptime WriterType: type) type {
-    const HasherType = switch (wrap) {
-        .gzip => std.hash.Crc32,
-        .zlib => std.hash.Adler32,
-        .raw => unreachable,
-    };
-
-    return struct {
-        hasher: HasherType = HasherType.init(),
-        rdr: ReaderType,
-        wrt: WriterType,
-        bytes: usize = 0,
-
-        const Self = @This();
-
-        pub const ReadError = ReaderType.Error;
-        pub const Reader = std.io.Reader(*Self, ReadError, read);
-        pub fn reader(self: *Self) Reader {
-            return .{ .context = self };
-        }
-        pub fn read(self: *Self, buf: []u8) ReadError!usize {
-            const n = try self.rw.read(buf);
-            self.hasher.update(buf[0..n]);
-            self.bytes += n;
-            return n;
-        }
-
-        pub const WriteError = WriterType.Error;
-        pub const Writer = std.io.Writer(*Self, WriteError, write);
-        pub fn writer(self: *Self) Writer {
-            return .{ .context = self };
-        }
-        pub fn write(self: *Self, buf: []const u8) WriteError!usize {
-            const n = try self.wrt.write(buf);
-            self.hasher.update(buf[0..n]);
-            self.bytes += n;
-            return n;
-        }
-
-        pub fn chksum(self: *Self) u32 {
-            return self.hasher.final();
-        }
-
-        pub fn bytesRead(self: *Self) u32 {
-            return @truncate(self.bytes);
-        }
-
-        pub fn parseHeader(self: *Self) !void {
-            switch (wrap) {
-                .gzip => try self.parseGzipHeader(),
-                .zlib => try self.parseZlibHeader(),
-                .raw => unreachable,
-            }
-        }
-
-        pub fn parseFooter(self: *Self) !void {
-            switch (wrap) {
-                .gzip => try self.parseGzipFooter(),
-                .zlib => try self.parseZlibFooter(),
-                .raw => unreachable,
-            }
-        }
-
-        pub fn parseGzipHeader(self: *Self) !void {
-            const magic1 = try self.rdr.read(u8);
-            const magic2 = try self.rdr.read(u8);
-            const method = try self.rdr.read(u8);
-            const flags = try self.rdr.read(u8);
-            try self.rdr.skipBytes(6); // mtime(4), xflags, os
-            if (magic1 != 0x1f or magic2 != 0x8b or method != 0x08)
-                return error.InvalidGzipHeader;
-            // Flags description: https://www.rfc-editor.org/rfc/rfc1952.html#page-5
-            if (flags != 0) {
-                if (flags & 0b0000_0100 != 0) { // FEXTRA
-                    const extra_len = try self.rdr.read(u16);
-                    try self.rdr.skipBytes(extra_len);
-                }
-                if (flags & 0b0000_1000 != 0) { // FNAME
-                    try self.rdr.skipStringZ();
-                }
-                if (flags & 0b0001_0000 != 0) { // FCOMMENT
-                    try self.rdr.skipStringZ();
-                }
-                if (flags & 0b0000_0010 != 0) { // FHCRC
-                    try self.rdr.skipBytes(2);
-                }
-            }
-        }
-
-        pub fn parseZlibHeader(self: *Self) !void {
-            const cinfo_cm = try self.rdr.read(u8);
-            _ = try self.rdr.read(u8);
-            if (cinfo_cm != 0x78) {
-                return error.InvalidZlibHeader;
-            }
-        }
-
-        pub fn parseGzipFooter(self: *Self) !void {
-            if (try self.rdr.read(u32) != self.chksum()) return error.GzipFooterChecksum;
-            if (try self.rdr.read(u32) != self.bytesRead()) return error.GzipFooterSize;
-        }
-
-        pub fn parseZlibFooter(self: *Self) !void {
-            if (try self.rdr.read(u32) != self.chksum()) return error.ZlibFooterChecksum;
-        }
-    };
 }
