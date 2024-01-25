@@ -45,6 +45,16 @@ pub fn run(output: anytype, opt: Options) !void {
             .deflate => try flate.compress(input, output, f_opt),
             .zlib => try zlib.compress(input, output, f_opt),
             .gzip => try gzip.compress(input, output, f_opt),
+            // .gzip => {
+            //     var buf: [4096]u8 = undefined;
+            //     var cmp = try gzip.compressor(output, f_opt);
+            //     while (true) {
+            //         const n = try input.readAll(&buf);
+            //         _ = try cmp.write(buf[0..n]);
+            //         if (n < buf.len) break;
+            //     }
+            //     try cmp.close();
+            // },
         }
     }
 }

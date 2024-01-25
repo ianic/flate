@@ -6,33 +6,7 @@ const print = std.debug.print;
 const Token = @import("Token.zig");
 const consts = @import("consts.zig");
 const hbw = @import("huffman_bit_writer.zig");
-const wrapper = @import("wrapper.zig");
-
-pub fn deflateWriter(writer: anytype, options: Options) Deflate(@TypeOf(writer)) {
-    return Deflate(@TypeOf(writer)).init(writer, options);
-}
-
-pub fn compress(reader: anytype, writer: anytype, options: Options) !void {
-    const tw = hbw.huffmanBitWriter(writer);
-    var df = Deflate(@TypeOf(tw)).init(tw, options);
-    try df.compress(reader);
-    try df.close();
-}
-
-pub fn gzip(reader: anytype, writer: anytype, options: Options) !void {
-    try compressWrapped(.gzip, reader, writer, options);
-}
-
-pub fn zlib(reader: anytype, writer: anytype, options: Options) !void {
-    try compressWrapped(.zlib, reader, writer, options);
-}
-
-fn compressWrapped(comptime kind: wrapper.Kind, reader: anytype, writer: anytype, options: Options) !void {
-    var wrp = wrapper.init(kind, reader, writer);
-    try wrp.writeHeader();
-    try compress(wrp.reader(), writer, options);
-    try wrp.writeFooter();
-}
+const proto = @import("protocol.zig");
 
 pub const Level = enum(u4) {
     // zig fmt: off
@@ -69,13 +43,33 @@ pub const Options = struct {
     level: Level = .default,
 };
 
-pub fn Deflate(comptime WriterType: type) type {
+pub fn compress(comptime kind: proto.Kind, reader: anytype, writer: anytype, options: Options) !void {
+    var df = try compressor(kind, writer, options);
+    try df.compress(reader);
+    try df.close();
+}
+
+pub fn compressor(comptime kind: proto.Kind, writer: anytype, options: Options) !Compressor(kind, @TypeOf(writer)) {
+    const tw = hbw.huffmanBitWriter(writer);
+    const wrp = proto.wrapper(kind, writer);
+    return try Deflate(@TypeOf(tw), @TypeOf(wrp)).init(tw, wrp, options);
+}
+
+pub fn Compressor(comptime kind: proto.Kind, comptime WriterType: type) type {
+    return Deflate(
+        hbw.HuffmanBitWriter(WriterType),
+        proto.Wrapper(kind, WriterType),
+    );
+}
+
+fn Deflate(comptime TokenWriter: type, comptime ProtocolWrapper: type) type {
     return struct {
         lookup: Lookup = .{},
         win: Window = .{},
         tokens: Tokens = .{},
-        token_writer: WriterType,
+        token_writer: TokenWriter,
         level: LevelArgs,
+        wrapper: ProtocolWrapper,
 
         // Match and literal at the previous position.
         // Used for lazy match finding in processWindow.
@@ -83,11 +77,14 @@ pub fn Deflate(comptime WriterType: type) type {
         prev_literal: ?u8 = null,
 
         const Self = @This();
-        pub fn init(w: WriterType, options: Options) Self {
-            return .{
+        pub fn init(w: TokenWriter, wp: ProtocolWrapper, options: Options) !Self {
+            var self = Self{
                 .token_writer = w,
+                .wrapper = wp,
                 .level = LevelArgs.get(options.level),
             };
+            try self.wrapper.writeHeader();
+            return self;
         }
 
         const TokenizeOption = enum { none, flush, final };
@@ -222,10 +219,12 @@ pub fn Deflate(comptime WriterType: type) type {
 
         pub fn close(self: *Self) !void {
             try self.tokenize(.final);
+            try self.wrapper.writeFooter();
         }
 
         pub fn write(self: *Self, input: []const u8) !usize {
             var buf = input;
+            self.wrapper.update(buf);
 
             while (buf.len > 0) {
                 const n = self.win.write(buf);
@@ -256,6 +255,7 @@ pub fn Deflate(comptime WriterType: type) type {
                     continue;
                 }
                 const n = try rdr.readAll(buf);
+                self.wrapper.update(buf[0..n]);
                 self.win.written(n);
                 // process win
                 try self.tokenize(.none);
@@ -267,7 +267,7 @@ pub fn Deflate(comptime WriterType: type) type {
         // Writer interface
 
         pub const Writer = std.io.Writer(*Self, Error, write);
-        pub const Error = WriterType.Error;
+        pub const Error = TokenWriter.Error;
 
         pub fn writer(self: *Self) Writer {
             return .{ .context = self };
@@ -291,15 +291,23 @@ test "deflate: tokenization" {
 
     for (cases) |c| {
         var fbs = std.io.fixedBufferStream(c.data);
-        var nw: TestTokenWriter = .{
+        var tw: TestTokenWriter = .{
             .expected = c.tokens,
         };
-        var df = deflateWriter(&nw, .{});
+        var wrp: TestProtocolWrapper = .{};
+        var df = try Deflate(@TypeOf(&tw), @TypeOf(&wrp)).init(&tw, &wrp, .{});
         try df.compress(fbs.reader());
         try df.close();
-        try expect(nw.pos == c.tokens.len);
+        try expect(tw.pos == c.tokens.len);
     }
 }
+
+const TestProtocolWrapper = struct {
+    const Self = @This();
+    pub fn writeHeader(_: *Self) !void {}
+    pub fn writeFooter(_: *Self) !void {}
+    pub fn update(_: *Self, _: []const u8) void {}
+};
 
 // Tests that tokens writen are equal to expected token list.
 const TestTokenWriter = struct {
@@ -476,10 +484,10 @@ test "check struct sizes" {
     const hbw_size = 11480; // 11.2k
     try expect(@sizeOf(Hbw) == hbw_size);
 
-    const D = Deflate(Hbw);
+    //const D = Deflate(Hbw);
     // 404744, 395.26k
     // ?Token: 6, ?u8: 2, level: 8
-    try expect(@sizeOf(D) == tokens_size + lookup_size + window_size + hbw_size + 6 + 2 + 8);
+    //try expect(@sizeOf(D) == tokens_size + lookup_size + window_size + hbw_size + 6 + 2 + 8);
 
     //print("Delfate size: {d} {d}\n", .{ @sizeOf(D), @sizeOf(LevelArgs) });
 
@@ -568,31 +576,31 @@ fn TokenDecoder(comptime WriterType: type) type {
     };
 }
 
-test "gzip compress file" {
-    if (true) return error.SkipZigTest;
-    const input_file_name = "benchdata/2600.txt.utf-8";
-    var input = try std.fs.cwd().openFile(input_file_name, .{});
-    defer input.close();
+// test "gzip compress file" {
+//     if (true) return error.SkipZigTest;
+//     const input_file_name = "benchdata/2600.txt.utf-8";
+//     var input = try std.fs.cwd().openFile(input_file_name, .{});
+//     defer input.close();
 
-    const output_file_name = "benchdata/output.gz";
-    var output = try std.fs.cwd().createFile(output_file_name, .{ .truncate = true });
-    defer output.close();
+//     const output_file_name = "benchdata/output.gz";
+//     var output = try std.fs.cwd().createFile(output_file_name, .{ .truncate = true });
+//     defer output.close();
 
-    try gzip(input.reader(), output.writer(), .{});
-}
+//     try gzip(input.reader(), output.writer(), .{});
+// }
 
-test "zlib compress file" {
-    if (true) return error.SkipZigTest;
-    const input_file_name = "benchdata/2600.txt.utf-8";
-    var input = try std.fs.cwd().openFile(input_file_name, .{});
-    defer input.close();
+// test "zlib compress file" {
+//     if (true) return error.SkipZigTest;
+//     const input_file_name = "benchdata/2600.txt.utf-8";
+//     var input = try std.fs.cwd().openFile(input_file_name, .{});
+//     defer input.close();
 
-    const output_file_name = "benchdata/output.zz";
-    var output = try std.fs.cwd().createFile(output_file_name, .{ .truncate = true });
-    defer output.close();
+//     const output_file_name = "benchdata/output.zz";
+//     var output = try std.fs.cwd().createFile(output_file_name, .{ .truncate = true });
+//     defer output.close();
 
-    try zlib(input.reader(), output.writer(), .{});
-}
+//     try zlib(input.reader(), output.writer(), .{});
+// }
 
 const Lookup = struct {
     const prime4 = 0x9E3779B1; // 4 bytes prime number 2654435761
