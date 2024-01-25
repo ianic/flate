@@ -455,9 +455,9 @@ test "check struct sizes" {
     const window_size = 64 * 1024 + 8 + 8 + 8;
     try expect(@sizeOf(Window) == window_size);
 
-    const Hbw = hbw.HuffmanBitWriter(std.io.FixedBufferStream([]const u8).Writer);
-    // huffman bit writer internal: 11480, fixed buffer stream: 8
-    const hbw_size = 11480 + 8; // 11,21875k
+    const Hbw = hbw.HuffmanBitWriter(@TypeOf(std.io.null_writer));
+    // huffman bit writer internal: 11480
+    const hbw_size = 11480; // 11.2k
     try expect(@sizeOf(Hbw) == hbw_size);
 
     const D = Deflate(Hbw);

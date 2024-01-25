@@ -2,8 +2,6 @@ const std = @import("std");
 const flate = @import("flate");
 const print = std.debug.print;
 
-// const data = @embedFile("bench_data/ziglang.tar");
-
 pub fn main() !void {
     if (readArgs() catch {
         std.process.exit(1);
@@ -28,9 +26,6 @@ pub fn main() !void {
 
 pub fn run(output: anytype, opt: Options) !void {
     const input = opt.input_file.?.reader();
-
-    // var fbs = std.io.fixedBufferStream(data);
-    // const input = fbs.reader();
 
     if (opt.stdlib) {
         switch (opt.alg) {
