@@ -3,6 +3,7 @@ const assert = std.debug.assert;
 const testing = std.testing;
 const expect = testing.expect;
 const print = std.debug.print;
+
 const Token = @import("Token.zig");
 const consts = @import("consts.zig");
 const hbw = @import("huffman_bit_writer.zig");
@@ -45,7 +46,7 @@ pub const Options = struct {
 
 pub fn compress(comptime kind: proto.Kind, reader: anytype, writer: anytype, options: Options) !void {
     var df = try compressor(kind, writer, options);
-    try df.compress(reader);
+    try df.stream(reader);
     try df.close();
 }
 
@@ -246,7 +247,8 @@ fn Deflate(comptime TokenWriter: type, comptime ProtocolWrapper: type) type {
             self.lookup.slide(n);
         }
 
-        pub fn compress(self: *Self, rdr: anytype) !void {
+        // TODO: name for this
+        pub fn stream(self: *Self, rdr: anytype) !void {
             while (true) {
                 // read from rdr into win
                 const buf = self.win.writable();
@@ -296,7 +298,7 @@ test "deflate: tokenization" {
         };
         var wrp: TestProtocolWrapper = .{};
         var df = try Deflate(@TypeOf(&tw), @TypeOf(&wrp)).init(&tw, &wrp, .{});
-        try df.compress(fbs.reader());
+        try df.stream(fbs.reader());
         try df.close();
         try expect(tw.pos == c.tokens.len);
     }
@@ -689,16 +691,16 @@ test "Lookup add/prev" {
     for (data, 0..) |_, i| {
         const prev = h.add(data[i..], @intCast(i));
         if (i >= 8 and i < 24) {
-            try testing.expect(prev == i - 8);
+            try expect(prev == i - 8);
         } else {
-            try testing.expect(prev == 0);
+            try expect(prev == 0);
         }
     }
 
     const v = Lookup.hash(data[2 .. 2 + 4]);
-    try testing.expect(h.head[v] == 2 + 16);
-    try testing.expect(h.chain[2 + 16] == 2 + 8);
-    try testing.expect(h.chain[2 + 8] == 2);
+    try expect(h.head[v] == 2 + 16);
+    try expect(h.chain[2 + 16] == 2 + 8);
+    try expect(h.chain[2 + 8] == 2);
 }
 
 test "Lookup bulkAdd" {
