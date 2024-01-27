@@ -143,9 +143,8 @@ test "decompress" {
 }
 
 test "compress/decompress" {
+    const Wrapper = @import("wrapper.zig").Wrapper;
     const fixedBufferStream = std.io.fixedBufferStream;
-
-    const Wrapping = @import("hasher.zig").Wrapping;
 
     var cmp_buf: [64 * 1024]u8 = undefined; // compressed buffer
     var dcm_buf: [128 * 1024]u8 = undefined; // decompressed buffer
@@ -180,8 +179,8 @@ test "compress/decompress" {
             const level: Level = @enumFromInt(ilevel);
             const gzip_size = case.gzip_sizes[ilevel - 4];
 
-            inline for (Wrapping.list) |wrap| { // for each wrapping
-                const compressed_size = gzip_size - Wrapping.gzip.size() + wrap.size();
+            inline for (Wrapper.list) |wrap| { // for each wrapping
+                const compressed_size = gzip_size - Wrapper.gzip.size() + wrap.size();
 
                 // compress original stream to compressed stream
                 {

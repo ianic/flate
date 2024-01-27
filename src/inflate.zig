@@ -6,16 +6,16 @@ const Huffman = @import("huffman.zig").Huffman;
 const BitReader = @import("bit_reader.zig").BitReader;
 const SlidingWindow = @import("sliding_window.zig").SlidingWindow;
 const consts = @import("consts.zig");
-const Wrapping = @import("hasher.zig").Wrapping;
+const Wrapper = @import("wrapper.zig").Wrapper;
 
-pub fn decompress(comptime wrap: Wrapping, input_reader: anytype, output_writer: anytype) !void {
+pub fn decompress(comptime wrap: Wrapper, input_reader: anytype, output_writer: anytype) !void {
     var inf = decompressor(wrap, input_reader);
     while (try inf.nextChunk()) |buf| {
         try output_writer.writeAll(buf);
     }
 }
 
-pub fn decompressor(comptime wrap: Wrapping, reader: anytype) Inflate(wrap, @TypeOf(reader)) {
+pub fn decompressor(comptime wrap: Wrapper, reader: anytype) Inflate(wrap, @TypeOf(reader)) {
     return Inflate(wrap, @TypeOf(reader)).init(reader);
 }
 
@@ -23,7 +23,7 @@ pub fn decompressor(comptime wrap: Wrapping, reader: anytype) Inflate(wrap, @Typ
 ///   - 64K for sliding window
 ///   - 2 * 32K of u16 for huffman codes
 ///
-pub fn Inflate(comptime wrap: Wrapping, comptime ReaderType: type) type {
+pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
     const BitReaderType = BitReader(ReaderType);
     return struct {
         rdr: BitReaderType,

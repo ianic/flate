@@ -8,7 +8,7 @@ const io = std.io;
 const Token = @import("Token.zig");
 const consts = @import("consts.zig");
 const hbw = @import("huffman_bit_writer.zig");
-const Wrapping = @import("hasher.zig").Wrapping;
+const Wrapper = @import("wrapper.zig").Wrapper;
 
 pub const Level = enum(u4) {
     // zig fmt: off
@@ -45,13 +45,13 @@ pub const Options = struct {
     level: Level = .default,
 };
 
-pub fn compress(comptime wrap: Wrapping, reader: anytype, writer: anytype, options: Options) !void {
+pub fn compress(comptime wrap: Wrapper, reader: anytype, writer: anytype, options: Options) !void {
     var df = try compressor(wrap, writer, options);
     try df.stream(reader);
     try df.close();
 }
 
-pub fn compressor(comptime wrap: Wrapping, writer: anytype, options: Options) !Deflate(
+pub fn compressor(comptime wrap: Wrapper, writer: anytype, options: Options) !Deflate(
     wrap,
     @TypeOf(writer),
     hbw.HuffmanBitWriter(@TypeOf(writer)),
@@ -61,7 +61,7 @@ pub fn compressor(comptime wrap: Wrapping, writer: anytype, options: Options) !D
     return try Deflate(wrap, WriterType, TokenWriter).init(writer, options);
 }
 
-fn Deflate(comptime wrap: Wrapping, comptime WriterType: type, comptime TokenWriter: type) type {
+fn Deflate(comptime wrap: Wrapper, comptime WriterType: type, comptime TokenWriter: type) type {
     return struct {
         lookup: Lookup = .{},
         win: Window = .{},
@@ -307,7 +307,7 @@ test "deflate: tokenization" {
     };
 
     for (cases) |c| {
-        inline for (Wrapping.list) |wrap| { // for each wrapping
+        inline for (Wrapper.list) |wrap| { // for each wrapping
             var cw = io.countingWriter(io.null_writer);
             const cww = cw.writer();
             var df = try Deflate(wrap, @TypeOf(cww), TestTokenWriter).init(cww, .{});
