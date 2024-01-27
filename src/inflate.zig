@@ -2,7 +2,7 @@ const std = @import("std");
 const assert = std.debug.assert;
 const testing = std.testing;
 
-const Huffman = @import("huffman.zig").Huffman;
+const hfd = @import("huffman_decoder.zig");
 const BitReader = @import("bit_reader.zig").BitReader;
 const SlidingWindow = @import("sliding_window.zig").SlidingWindow;
 const consts = @import("consts.zig");
@@ -32,9 +32,9 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
         hasher: wrap.Hasher() = .{},
 
         // dynamic block huffman codes
-        lit_h: Huffman(286) = .{}, // literals
-        dst_h: Huffman(30) = .{}, // distances
-        cl_h: Huffman(19) = .{}, // code length
+        lit_h: hfd.LiteralDecoder = .{}, // literals
+        dst_h: hfd.OffsetDecoder = .{}, // distances
+        cl_h: hfd.CodegenDecoder = .{}, // code length
 
         // current read state
         bfinal: u1 = 0,

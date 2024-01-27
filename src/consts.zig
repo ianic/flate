@@ -28,15 +28,6 @@ pub const lookup = struct {
 
 // Huffman Codes
 
-// The largest offset code.
-pub const offset_code_count = 30;
-// Max number of frequencies used for a Huffman Code
-// Possible lengths are codegenCodeCount (19), offset_code_count (30) and max_num_lit (286).
-// The largest of these is max_num_lit.
-pub const max_num_frequencies = max_num_lit;
-// Maximum number of literals.
-pub const max_num_lit = 286;
-
 // Deflate
 
 // Biggest block size for uncompressed block.
@@ -49,4 +40,15 @@ pub const huffman = struct {
     pub const codegen_order = [_]u32{ 16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15 };
     // The number of codegen codes.
     pub const codegen_code_count = 19;
+
+    // The largest offset code.
+    pub const offset_code_count = 30;
+    // Max number of frequencies used for a Huffman Code
+    // Possible lengths are codegenCodeCount (19), offset_code_count (30) and max_num_lit (286).
+    // The largest of these is max_num_lit.
+    pub const max_num_frequencies = max_num_lit;
+    // Maximum number of literals.
+    pub const max_num_lit = 286;
+
+    pub const literal_code_count = max_num_lit;
 };

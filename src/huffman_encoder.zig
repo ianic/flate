@@ -51,7 +51,7 @@ pub fn HuffmanEncoder(comptime size: usize) type {
         codes: [size]HuffCode = undefined,
         // Reusable buffer with the longest possible frequency table.
         // (deflate_const.max_num_frequencies).
-        freq_cache: [consts.max_num_frequencies + 1]LiteralNode = undefined,
+        freq_cache: [consts.huffman.max_num_frequencies + 1]LiteralNode = undefined,
         bit_count: [17]u32 = undefined,
         lns: []LiteralNode = undefined, // sorted by literal, stored to avoid repeated allocation in generate
         lfs: []LiteralNode = undefined, // sorted by frequency, stored to avoid repeated allocation in generate
@@ -292,8 +292,8 @@ pub fn huffmanEncoder(comptime size: u32) HuffmanEncoder(size) {
     return .{};
 }
 
-pub const LiteralEncoder = HuffmanEncoder(consts.max_num_frequencies);
-pub const OffsetEncoder = HuffmanEncoder(consts.offset_code_count);
+pub const LiteralEncoder = HuffmanEncoder(consts.huffman.max_num_frequencies);
+pub const OffsetEncoder = HuffmanEncoder(consts.huffman.offset_code_count);
 pub const CodegenEncoder = HuffmanEncoder(19);
 
 // Generates a HuffmanCode corresponding to the fixed literal table
@@ -301,7 +301,7 @@ pub fn fixedLiteralEncoder() LiteralEncoder {
     var h: LiteralEncoder = undefined;
     var ch: u16 = 0;
 
-    while (ch < consts.max_num_frequencies) : (ch += 1) {
+    while (ch < consts.huffman.max_num_frequencies) : (ch += 1) {
         var bits: u16 = undefined;
         var size: u16 = undefined;
         switch (ch) {

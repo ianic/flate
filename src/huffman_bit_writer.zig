@@ -1,7 +1,7 @@
 const std = @import("std");
 const io = std.io;
 
-const hc = @import("huffman_code.zig");
+const hc = @import("huffman_encoder.zig");
 const Token = @import("Token.zig");
 const consts = @import("consts.zig");
 const codegen_order = consts.huffman.codegen_order;
@@ -39,9 +39,9 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
         bytes: [buffer_size]u8,
         codegen_freq: [codegen_code_count]u16,
         nbytes: u32, // number of bytes
-        literal_freq: [consts.max_num_lit]u16,
-        offset_freq: [consts.offset_code_count]u16,
-        codegen: [consts.max_num_lit + consts.offset_code_count + 1]u8,
+        literal_freq: [consts.huffman.max_num_lit]u16,
+        offset_freq: [consts.huffman.offset_code_count]u16,
+        codegen: [consts.huffman.max_num_lit + consts.huffman.offset_code_count + 1]u8,
         literal_encoding: hc.LiteralEncoder,
         offset_encoding: hc.OffsetEncoder,
         codegen_encoding: hc.CodegenEncoder,
@@ -50,7 +50,7 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
         huff_offset: hc.OffsetEncoder,
 
         pub fn init(writer: WriterType) Self {
-            var offset_freq = [1]u16{0} ** consts.offset_code_count;
+            var offset_freq = [1]u16{0} ** consts.huffman.offset_code_count;
             offset_freq[0] = 1;
             // huff_offset is a static offset encoder used for huffman only encoding.
             // It can be reused since we will not be encoding offset values.

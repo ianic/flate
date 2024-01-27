@@ -24,15 +24,16 @@ pub const Symbol = packed struct {
     }
 };
 
+pub const LiteralDecoder = HuffmanDecoder(286, 15, 9);
+pub const OffsetDecoder = HuffmanDecoder(30, 15, 9);
+pub const CodegenDecoder = HuffmanDecoder(19, 7, 0);
+
 /// Creates huffman tree codes from list of code lengths.
-pub fn Huffman(comptime alphabet_size: u16) type {
-    const max_code_bits = if (alphabet_size == 19) 7 else 15;
-    const small_lookup_bits = switch (alphabet_size) {
-        286 => 9,
-        30 => 9,
-        19 => 0,
-        else => unreachable,
-    };
+fn HuffmanDecoder(
+    comptime alphabet_size: u16,
+    comptime max_code_bits: u4,
+    comptime small_lookup_bits: u4,
+) type {
     const small_lookup_shift = max_code_bits - small_lookup_bits;
 
     return struct {
@@ -101,7 +102,7 @@ pub fn Huffman(comptime alphabet_size: u16) type {
 test "Huffman init/find" {
     // example data from: https://youtu.be/SJPvNi4HrWQ?t=8423
     const code_lens = [_]u4{ 4, 3, 0, 2, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 3, 2 };
-    var h: Huffman(19) = .{};
+    var h: CodegenDecoder = .{};
     h.build(&code_lens);
 
     // unused symbols
@@ -179,6 +180,6 @@ test "inspect sizes" {
     std.debug.print("{d}\n", .{@sizeOf(Symbol)});
     std.debug.print("{d}\n", .{@sizeOf([1 << 15]Symbol) / 1024});
     std.debug.print("{d}\n", .{@sizeOf([1 << 15]u8) / 1024});
-    std.debug.print("{d}\n", .{@sizeOf(Huffman(286)) / 1024});
-    std.debug.print("{d}\n", .{@sizeOf(Huffman(286))});
+    std.debug.print("{d}\n", .{@sizeOf(HuffmanDecoder(286)) / 1024});
+    std.debug.print("{d}\n", .{@sizeOf(HuffmanDecoder(286))});
 }
