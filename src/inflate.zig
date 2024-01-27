@@ -7,7 +7,6 @@ const BitReader = @import("bit_reader.zig").BitReader;
 const SlidingWindow = @import("sliding_window.zig").SlidingWindow;
 const consts = @import("consts.zig");
 const Wrapping = @import("hasher.zig").Wrapping;
-const Hasher = @import("hasher.zig").Hasher;
 
 pub fn decompress(comptime wrap: Wrapping, input_reader: anytype, output_writer: anytype) !void {
     var inf = decompressor(wrap, input_reader);
@@ -26,11 +25,10 @@ pub fn decompressor(comptime wrap: Wrapping, reader: anytype) Inflate(wrap, @Typ
 ///
 pub fn Inflate(comptime wrap: Wrapping, comptime ReaderType: type) type {
     const BitReaderType = BitReader(ReaderType);
-    const HasherType = Hasher(wrap);
     return struct {
         rdr: BitReaderType,
         win: SlidingWindow = .{},
-        hasher: HasherType = .{},
+        hasher: wrap.Hasher() = .{},
 
         // dynamic block huffman codes
         lit_h: Huffman(286) = .{}, // literals
@@ -296,59 +294,11 @@ pub fn Inflate(comptime wrap: Wrapping, comptime ReaderType: type) type {
         }
 
         fn parseHeader(self: *Self) !void {
-            switch (wrap) {
-                .gzip => try self.parseGzipHeader(),
-                .zlib => try self.parseZlibHeader(),
-                .raw => {},
-            }
+            try wrap.parseHeader(&self.rdr);
         }
 
-        fn parseGzipHeader(self: *Self) !void {
-            const magic1 = try self.rdr.read(u8);
-            const magic2 = try self.rdr.read(u8);
-            const method = try self.rdr.read(u8);
-            const flags = try self.rdr.read(u8);
-            try self.rdr.skipBytes(6); // mtime(4), xflags, os
-            if (magic1 != 0x1f or magic2 != 0x8b or method != 0x08)
-                return error.InvalidGzipHeader;
-            // Flags description: https://www.rfc-editor.org/rfc/rfc1952.html#page-5
-            if (flags != 0) {
-                if (flags & 0b0000_0100 != 0) { // FEXTRA
-                    const extra_len = try self.rdr.read(u16);
-                    try self.rdr.skipBytes(extra_len);
-                }
-                if (flags & 0b0000_1000 != 0) { // FNAME
-                    try self.rdr.skipStringZ();
-                }
-                if (flags & 0b0001_0000 != 0) { // FCOMMENT
-                    try self.rdr.skipStringZ();
-                }
-                if (flags & 0b0000_0010 != 0) { // FHCRC
-                    try self.rdr.skipBytes(2);
-                }
-            }
-        }
-
-        fn parseZlibHeader(self: *Self) !void {
-            const cinfo_cm = try self.rdr.read(u8);
-            _ = try self.rdr.read(u8);
-            if (cinfo_cm != 0x78) {
-                return error.InvalidZlibHeader;
-            }
-        }
-
-        pub fn parseFooter(self: *Self) !void {
-            switch (wrap) {
-                .gzip => {
-                    if (try self.rdr.read(u32) != self.hasher.chksum()) return error.GzipFooterChecksum;
-                    if (try self.rdr.read(u32) != self.hasher.bytesRead()) return error.GzipFooterSize;
-                },
-                .zlib => {
-                    const chksum: u32 = @byteSwap(self.hasher.chksum());
-                    if (try self.rdr.read(u32) != chksum) return error.ZlibFooterChecksum;
-                },
-                .raw => {},
-            }
+        fn parseFooter(self: *Self) !void {
+            try wrap.parseFooter(&self.hasher, &self.rdr);
         }
     };
 }

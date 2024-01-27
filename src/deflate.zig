@@ -9,7 +9,6 @@ const Token = @import("Token.zig");
 const consts = @import("consts.zig");
 const hbw = @import("huffman_bit_writer.zig");
 const Wrapping = @import("hasher.zig").Wrapping;
-const Hasher = @import("hasher.zig").Hasher;
 
 pub const Level = enum(u4) {
     // zig fmt: off
@@ -63,8 +62,6 @@ pub fn compressor(comptime wrap: Wrapping, writer: anytype, options: Options) !D
 }
 
 fn Deflate(comptime wrap: Wrapping, comptime WriterType: type, comptime TokenWriter: type) type {
-    const HasherType = Hasher(wrap);
-
     return struct {
         lookup: Lookup = .{},
         win: Window = .{},
@@ -72,7 +69,7 @@ fn Deflate(comptime wrap: Wrapping, comptime WriterType: type, comptime TokenWri
         wrt: WriterType,
         token_writer: TokenWriter,
         level: LevelArgs,
-        hasher: HasherType = .{},
+        hasher: wrap.Hasher() = .{},
 
         // Match and literal at the previous position.
         // Used for lazy match finding in processWindow.
@@ -278,62 +275,12 @@ fn Deflate(comptime wrap: Wrapping, comptime WriterType: type, comptime TokenWri
         }
 
         // header and footer
-        pub fn writeHeader(self: *Self) !void {
-            switch (wrap) {
-                .gzip => {
-                    // GZIP 10 byte header (https://datatracker.ietf.org/doc/html/rfc1952#page-5):
-                    //  - ID1 (IDentification 1), always 0x1f
-                    //  - ID2 (IDentification 2), always 0x8b
-                    //  - CM (Compression Method), always 8 = deflate
-                    //  - FLG (Flags), all set to 0
-                    //  - 4 bytes, MTIME (Modification time), not used, all set to zero
-                    //  - XFL (eXtra FLags), all set to zero
-                    //  - OS (Operating System), 03 = Unix
-                    const gzipHeader = [_]u8{ 0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03 };
-                    try self.wrt.writeAll(&gzipHeader);
-                },
-                .zlib => {
-                    // ZLIB has a two-byte header (https://datatracker.ietf.org/doc/html/rfc1950#page-4):
-                    // 1st byte:
-                    //  - First four bits is the CINFO (compression info), which is 7 for the default deflate window size.
-                    //  - The next four bits is the CM (compression method), which is 8 for deflate.
-                    // 2nd byte:
-                    //  - Two bits is the FLEVEL (compression level). Values are: 0=fastest, 1=fast, 2=default, 3=best.
-                    //  - The next bit, FDICT, is set if a dictionary is given.
-                    //  - The final five FCHECK bits form a mod-31 checksum.
-                    //
-                    // CINFO = 7, CM = 8, FLEVEL = 0b10, FDICT = 0, FCHECK = 0b11100
-                    const zlibHeader = [_]u8{ 0x78, 0b10_0_11100 };
-                    try self.wrt.writeAll(&zlibHeader);
-                },
-                .raw => {},
-            }
+        fn writeHeader(self: *Self) !void {
+            try wrap.writeHeader(self.wrt);
         }
 
-        pub fn writeFooter(self: *Self) !void {
-            var bits: [4]u8 = undefined;
-            switch (wrap) {
-                .gzip => {
-                    // GZIP 8 bytes footer
-                    //  - 4 bytes, CRC32 (CRC-32)
-                    //  - 4 bytes, ISIZE (Input SIZE) - size of the original (uncompressed) input data modulo 2^32
-                    std.mem.writeInt(u32, &bits, self.hasher.chksum(), .little);
-                    try self.wrt.writeAll(&bits);
-
-                    std.mem.writeInt(u32, &bits, self.hasher.bytesRead(), .little);
-                    try self.wrt.writeAll(&bits);
-                },
-                .zlib => {
-                    // ZLIB (RFC 1950) is big-endian, unlike GZIP (RFC 1952).
-                    // 4 bytes of ADLER32 (Adler-32 checksum)
-                    // Checksum value of the uncompressed data (excluding any
-                    // dictionary data) computed according to Adler-32
-                    // algorithm.
-                    std.mem.writeInt(u32, &bits, self.hasher.chksum(), .big);
-                    try self.wrt.writeAll(&bits);
-                },
-                .raw => {},
-            }
+        fn writeFooter(self: *Self) !void {
+            try wrap.writeFooter(&self.hasher, self.wrt);
         }
     };
 }
