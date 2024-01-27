@@ -3,11 +3,13 @@ const assert = std.debug.assert;
 const testing = std.testing;
 const expect = testing.expect;
 const print = std.debug.print;
+const io = std.io;
 
 const Token = @import("Token.zig");
 const consts = @import("consts.zig");
 const hbw = @import("huffman_bit_writer.zig");
-const proto = @import("protocol.zig");
+const Wrapping = @import("hasher.zig").Wrapping;
+const Hasher = @import("hasher.zig").Hasher;
 
 pub const Level = enum(u4) {
     // zig fmt: off
@@ -44,33 +46,33 @@ pub const Options = struct {
     level: Level = .default,
 };
 
-pub fn compress(comptime kind: proto.Kind, reader: anytype, writer: anytype, options: Options) !void {
-    var df = try compressor(kind, writer, options);
+pub fn compress(comptime wrap: Wrapping, reader: anytype, writer: anytype, options: Options) !void {
+    var df = try compressor(wrap, writer, options);
     try df.stream(reader);
     try df.close();
 }
 
-pub fn compressor(comptime kind: proto.Kind, writer: anytype, options: Options) !Compressor(kind, @TypeOf(writer)) {
-    const tw = hbw.huffmanBitWriter(writer);
-    const wrp = proto.wrapper(kind, writer);
-    return try Deflate(@TypeOf(tw), @TypeOf(wrp)).init(tw, wrp, options);
+pub fn compressor(comptime wrap: Wrapping, writer: anytype, options: Options) !Deflate(
+    wrap,
+    @TypeOf(writer),
+    hbw.HuffmanBitWriter(@TypeOf(writer)),
+) {
+    const WriterType = @TypeOf(writer);
+    const TokenWriter = hbw.HuffmanBitWriter(WriterType);
+    return try Deflate(wrap, WriterType, TokenWriter).init(writer, options);
 }
 
-pub fn Compressor(comptime kind: proto.Kind, comptime WriterType: type) type {
-    return Deflate(
-        hbw.HuffmanBitWriter(WriterType),
-        proto.Wrapper(kind, WriterType),
-    );
-}
+fn Deflate(comptime wrap: Wrapping, comptime WriterType: type, comptime TokenWriter: type) type {
+    const HasherType = Hasher(wrap);
 
-fn Deflate(comptime TokenWriter: type, comptime ProtocolWrapper: type) type {
     return struct {
         lookup: Lookup = .{},
         win: Window = .{},
         tokens: Tokens = .{},
+        wrt: WriterType,
         token_writer: TokenWriter,
         level: LevelArgs,
-        wrapper: ProtocolWrapper,
+        hasher: HasherType = .{},
 
         // Match and literal at the previous position.
         // Used for lazy match finding in processWindow.
@@ -78,13 +80,13 @@ fn Deflate(comptime TokenWriter: type, comptime ProtocolWrapper: type) type {
         prev_literal: ?u8 = null,
 
         const Self = @This();
-        pub fn init(w: TokenWriter, wp: ProtocolWrapper, options: Options) !Self {
+        pub fn init(wrt: WriterType, options: Options) !Self {
             var self = Self{
-                .token_writer = w,
-                .wrapper = wp,
+                .wrt = wrt,
+                .token_writer = TokenWriter.init(wrt),
                 .level = LevelArgs.get(options.level),
             };
-            try self.wrapper.writeHeader();
+            try self.writeHeader();
             return self;
         }
 
@@ -220,12 +222,12 @@ fn Deflate(comptime TokenWriter: type, comptime ProtocolWrapper: type) type {
 
         pub fn close(self: *Self) !void {
             try self.tokenize(.final);
-            try self.wrapper.writeFooter();
+            try self.writeFooter();
         }
 
         pub fn write(self: *Self, input: []const u8) !usize {
             var buf = input;
-            self.wrapper.update(buf);
+            self.hasher.update(buf);
 
             while (buf.len > 0) {
                 const n = self.win.write(buf);
@@ -257,7 +259,7 @@ fn Deflate(comptime TokenWriter: type, comptime ProtocolWrapper: type) type {
                     continue;
                 }
                 const n = try rdr.readAll(buf);
-                self.wrapper.update(buf[0..n]);
+                self.hasher.update(buf[0..n]);
                 self.win.written(n);
                 // process win
                 try self.tokenize(.none);
@@ -268,11 +270,70 @@ fn Deflate(comptime TokenWriter: type, comptime ProtocolWrapper: type) type {
 
         // Writer interface
 
-        pub const Writer = std.io.Writer(*Self, Error, write);
+        pub const Writer = io.Writer(*Self, Error, write);
         pub const Error = TokenWriter.Error;
 
         pub fn writer(self: *Self) Writer {
             return .{ .context = self };
+        }
+
+        // header and footer
+        pub fn writeHeader(self: *Self) !void {
+            switch (wrap) {
+                .gzip => {
+                    // GZIP 10 byte header (https://datatracker.ietf.org/doc/html/rfc1952#page-5):
+                    //  - ID1 (IDentification 1), always 0x1f
+                    //  - ID2 (IDentification 2), always 0x8b
+                    //  - CM (Compression Method), always 8 = deflate
+                    //  - FLG (Flags), all set to 0
+                    //  - 4 bytes, MTIME (Modification time), not used, all set to zero
+                    //  - XFL (eXtra FLags), all set to zero
+                    //  - OS (Operating System), 03 = Unix
+                    const gzipHeader = [_]u8{ 0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03 };
+                    try self.wrt.writeAll(&gzipHeader);
+                },
+                .zlib => {
+                    // ZLIB has a two-byte header (https://datatracker.ietf.org/doc/html/rfc1950#page-4):
+                    // 1st byte:
+                    //  - First four bits is the CINFO (compression info), which is 7 for the default deflate window size.
+                    //  - The next four bits is the CM (compression method), which is 8 for deflate.
+                    // 2nd byte:
+                    //  - Two bits is the FLEVEL (compression level). Values are: 0=fastest, 1=fast, 2=default, 3=best.
+                    //  - The next bit, FDICT, is set if a dictionary is given.
+                    //  - The final five FCHECK bits form a mod-31 checksum.
+                    //
+                    // CINFO = 7, CM = 8, FLEVEL = 0b10, FDICT = 0, FCHECK = 0b11100
+                    const zlibHeader = [_]u8{ 0x78, 0b10_0_11100 };
+                    try self.wrt.writeAll(&zlibHeader);
+                },
+                .raw => {},
+            }
+        }
+
+        pub fn writeFooter(self: *Self) !void {
+            var bits: [4]u8 = undefined;
+            switch (wrap) {
+                .gzip => {
+                    // GZIP 8 bytes footer
+                    //  - 4 bytes, CRC32 (CRC-32)
+                    //  - 4 bytes, ISIZE (Input SIZE) - size of the original (uncompressed) input data modulo 2^32
+                    std.mem.writeInt(u32, &bits, self.hasher.chksum(), .little);
+                    try self.wrt.writeAll(&bits);
+
+                    std.mem.writeInt(u32, &bits, self.hasher.bytesRead(), .little);
+                    try self.wrt.writeAll(&bits);
+                },
+                .zlib => {
+                    // ZLIB (RFC 1950) is big-endian, unlike GZIP (RFC 1952).
+                    // 4 bytes of ADLER32 (Adler-32 checksum)
+                    // Checksum value of the uncompressed data (excluding any
+                    // dictionary data) computed according to Adler-32
+                    // algorithm.
+                    std.mem.writeInt(u32, &bits, self.hasher.chksum(), .big);
+                    try self.wrt.writeAll(&bits);
+                },
+                .raw => {},
+            }
         }
     };
 }
@@ -289,38 +350,93 @@ test "deflate: tokenization" {
             .data = "Blah blah blah blah blah!",
             .tokens = &[_]Token{ L('B'), L('l'), L('a'), L('h'), L(' '), L('b'), M(5, 18), L('!') },
         },
+        .{
+            .data = "ABCDEABCD ABCDEABCD",
+            .tokens = &[_]Token{
+                L('A'), L('B'),   L('C'), L('D'), L('E'), L('A'), L('B'), L('C'), L('D'), L(' '),
+                L('A'), M(10, 8),
+            },
+        },
     };
 
     for (cases) |c| {
-        var fbs = std.io.fixedBufferStream(c.data);
-        var tw: TestTokenWriter = .{
-            .expected = c.tokens,
-        };
-        var wrp: TestProtocolWrapper = .{};
-        var df = try Deflate(@TypeOf(&tw), @TypeOf(&wrp)).init(&tw, &wrp, .{});
-        try df.stream(fbs.reader());
-        try df.close();
-        try expect(tw.pos == c.tokens.len);
+        // raw
+        {
+            var cw = io.countingWriter(io.null_writer);
+            const cww = cw.writer();
+            var df = try Deflate(.raw, @TypeOf(cww), TestTokenWriter).init(cww, .{});
+
+            _ = try df.write(c.data);
+            try df.flush();
+
+            // df.token_writer.show();
+            try expect(df.token_writer.pos == c.tokens.len); // number of tokens written
+            try testing.expectEqualSlices(Token, df.token_writer.get(), c.tokens); // tokens match
+
+            try testing.expectEqual(0, cw.bytes_written);
+            try df.close();
+            try testing.expectEqual(0, cw.bytes_written);
+        }
+        // gzip
+        {
+            var cw = io.countingWriter(io.null_writer);
+            const cww = cw.writer();
+            var df = try Deflate(.gzip, @TypeOf(cww), TestTokenWriter).init(cww, .{});
+
+            _ = try df.write(c.data);
+            try df.flush();
+
+            try expect(df.token_writer.pos == c.tokens.len); // number of tokens written
+            try testing.expectEqualSlices(Token, df.token_writer.get(), c.tokens); // tokens match
+
+            try testing.expectEqual(10, cw.bytes_written); // gzip header
+            try df.close();
+            try testing.expectEqual(10 + 8, cw.bytes_written); // footer is added
+        }
+        // zlib
+        {
+            var cw = io.countingWriter(io.null_writer);
+            const cww = cw.writer();
+            var df = try Deflate(.zlib, @TypeOf(cww), TestTokenWriter).init(cww, .{});
+
+            _ = try df.write(c.data);
+            try df.flush();
+
+            try expect(df.token_writer.pos == c.tokens.len); // number of tokens written
+            try testing.expectEqualSlices(Token, df.token_writer.get(), c.tokens); // tokens match
+
+            try testing.expectEqual(2, cw.bytes_written); // zlib header
+            try df.close();
+            try testing.expectEqual(2 + 4, cw.bytes_written); // footer is added
+        }
     }
 }
-
-const TestProtocolWrapper = struct {
-    const Self = @This();
-    pub fn writeHeader(_: *Self) !void {}
-    pub fn writeFooter(_: *Self) !void {}
-    pub fn update(_: *Self, _: []const u8) void {}
-};
 
 // Tests that tokens writen are equal to expected token list.
 const TestTokenWriter = struct {
     const Self = @This();
-    expected: []const Token,
+    //expected: []const Token,
     pos: usize = 0,
+    actual: [1024]Token = undefined,
 
+    pub fn init(_: anytype) Self {
+        return .{};
+    }
     pub fn writeBlock(self: *Self, tokens: []const Token, _: bool, _: ?[]const u8) !void {
         for (tokens) |t| {
-            try expect(t.eql(self.expected[self.pos]));
+            self.actual[self.pos] = t;
             self.pos += 1;
+        }
+    }
+
+    pub fn get(self: *Self) []Token {
+        return self.actual[0..self.pos];
+    }
+
+    pub fn show(self: *Self) void {
+        print("\n", .{});
+        for (self.get()) |t| {
+            t.show();
         }
     }
 
@@ -481,7 +597,7 @@ test "check struct sizes" {
     const window_size = 64 * 1024 + 8 + 8 + 8;
     try expect(@sizeOf(Window) == window_size);
 
-    const Hbw = hbw.HuffmanBitWriter(@TypeOf(std.io.null_writer));
+    const Hbw = hbw.HuffmanBitWriter(@TypeOf(io.null_writer));
     // huffman bit writer internal: 11480
     const hbw_size = 11480; // 11.2k
     try expect(@sizeOf(Hbw) == hbw_size);
@@ -496,9 +612,9 @@ test "check struct sizes" {
     // current std lib deflate allocation:
     // 797_901, 779.2k
     // measured with:
-    // var la = std.heap.logToWriterAllocator(testing.allocator, std.io.getStdOut().writer());
+    // var la = std.heap.logToWriterAllocator(testing.allocator, io.getStdOut().writer());
     // const allocator = la.allocator();
-    // var cmp = try std.compress.deflate.compressor(allocator, std.io.null_writer, .{});
+    // var cmp = try std.compress.deflate.compressor(allocator, io.null_writer, .{});
     // defer cmp.deinit();
 }
 
@@ -540,7 +656,7 @@ test "deflate compress file to stdout" {
     var file = try std.fs.cwd().openFile(file_name, .{});
     defer file.close();
 
-    const wrt = std.io.getStdOut().writer();
+    const wrt = io.getStdOut().writer();
 
     const tw: TokenDecoder(@TypeOf(wrt)) = .{ .wrt = wrt };
     var df = Deflate(@TypeOf(tw)).init(tw);
@@ -577,32 +693,6 @@ fn TokenDecoder(comptime WriterType: type) type {
         pub fn flush(_: *Self) !void {}
     };
 }
-
-// test "gzip compress file" {
-//     if (true) return error.SkipZigTest;
-//     const input_file_name = "benchdata/2600.txt.utf-8";
-//     var input = try std.fs.cwd().openFile(input_file_name, .{});
-//     defer input.close();
-
-//     const output_file_name = "benchdata/output.gz";
-//     var output = try std.fs.cwd().createFile(output_file_name, .{ .truncate = true });
-//     defer output.close();
-
-//     try gzip(input.reader(), output.writer(), .{});
-// }
-
-// test "zlib compress file" {
-//     if (true) return error.SkipZigTest;
-//     const input_file_name = "benchdata/2600.txt.utf-8";
-//     var input = try std.fs.cwd().openFile(input_file_name, .{});
-//     defer input.close();
-
-//     const output_file_name = "benchdata/output.zz";
-//     var output = try std.fs.cwd().createFile(output_file_name, .{ .truncate = true });
-//     defer output.close();
-
-//     try zlib(input.reader(), output.writer(), .{});
-// }
 
 const Lookup = struct {
     const prime4 = 0x9E3779B1; // 4 bytes prime number 2654435761

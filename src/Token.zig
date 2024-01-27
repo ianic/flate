@@ -255,6 +255,14 @@ pub fn offsetExtraBits(code: u32) u8 {
     return match_offsets[code].extra_bits;
 }
 
+pub fn show(t: Token) void {
+    if (t.kind == .literal) {
+        print("L('{c}'), ", .{t.literal()});
+    } else {
+        print("M({d}, {d}), ", .{ t.offset(), t.length() });
+    }
+}
+
 const print = std.debug.print;
 const expect = std.testing.expect;
 

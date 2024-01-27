@@ -49,6 +49,34 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
         fixed_offset_encoding: hc.OffsetEncoder,
         huff_offset: hc.OffsetEncoder,
 
+        pub fn init(writer: WriterType) Self {
+            var offset_freq = [1]u16{0} ** consts.offset_code_count;
+            offset_freq[0] = 1;
+            // huff_offset is a static offset encoder used for huffman only encoding.
+            // It can be reused since we will not be encoding offset values.
+            var huff_offset: hc.OffsetEncoder = .{};
+            huff_offset.generate(offset_freq[0..], 15);
+
+            return .{
+                .inner_writer = writer,
+                .bytes_written = 0,
+                .bits = 0,
+                .nbits = 0,
+                .nbytes = 0,
+                .bytes = undefined,
+                .codegen_freq = undefined,
+                .literal_freq = undefined,
+                .offset_freq = undefined,
+                .codegen = undefined,
+                .literal_encoding = .{},
+                .codegen_encoding = .{},
+                .offset_encoding = .{},
+                .fixed_literal_encoding = hc.fixedLiteralEncoder(),
+                .fixed_offset_encoding = hc.fixedOffsetEncoder(),
+                .huff_offset = huff_offset,
+            };
+        }
+
         fn reset(self: *Self, new_writer: WriterType) void {
             self.inner_writer = new_writer;
             self.bytes_written = 0;
@@ -668,31 +696,7 @@ const StoredSize = struct {
 };
 
 pub fn huffmanBitWriter(writer: anytype) HuffmanBitWriter(@TypeOf(writer)) {
-    var offset_freq = [1]u16{0} ** consts.offset_code_count;
-    offset_freq[0] = 1;
-    // huff_offset is a static offset encoder used for huffman only encoding.
-    // It can be reused since we will not be encoding offset values.
-    var huff_offset: hc.OffsetEncoder = .{};
-    huff_offset.generate(offset_freq[0..], 15);
-
-    return HuffmanBitWriter(@TypeOf(writer)){
-        .inner_writer = writer,
-        .bytes_written = 0,
-        .bits = 0,
-        .nbits = 0,
-        .nbytes = 0,
-        .bytes = undefined,
-        .codegen_freq = undefined,
-        .literal_freq = undefined,
-        .offset_freq = undefined,
-        .codegen = undefined,
-        .literal_encoding = .{},
-        .codegen_encoding = .{},
-        .offset_encoding = .{},
-        .fixed_literal_encoding = hc.fixedLiteralEncoder(),
-        .fixed_offset_encoding = hc.fixedOffsetEncoder(),
-        .huff_offset = huff_offset,
-    };
+    return HuffmanBitWriter(@TypeOf(writer)).init(writer);
 }
 
 // histogram accumulates a histogram of b in h.

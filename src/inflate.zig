@@ -1,56 +1,13 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const testing = std.testing;
+
 const Huffman = @import("huffman.zig").Huffman;
 const BitReader = @import("bit_reader.zig").BitReader;
 const SlidingWindow = @import("sliding_window.zig").SlidingWindow;
 const consts = @import("consts.zig");
-
-pub const Wrapping = enum {
-    raw, // no header or footer
-    gzip, // gzip header and footer
-    zlib, // zlib header and footer
-};
-
-fn Hasher(comptime wrap: Wrapping) type {
-    const HasherType = switch (wrap) {
-        .gzip => std.hash.Crc32,
-        .zlib => std.hash.Adler32,
-        .raw => struct {
-            pub fn init() @This() {
-                return .{};
-            }
-        },
-    };
-
-    return struct {
-        hasher: HasherType = HasherType.init(),
-        bytes: usize = 0,
-
-        const Self = @This();
-
-        pub inline fn update(self: *Self, buf: []const u8) void {
-            switch (wrap) {
-                .raw => {},
-                else => {
-                    self.hasher.update(buf);
-                    self.bytes += buf.len;
-                },
-            }
-        }
-
-        pub fn chksum(self: *Self) u32 {
-            switch (wrap) {
-                .raw => return 0,
-                else => return self.hasher.final(),
-            }
-        }
-
-        pub fn bytesRead(self: *Self) u32 {
-            return @truncate(self.bytes);
-        }
-    };
-}
+const Wrapping = @import("hasher.zig").Wrapping;
+const Hasher = @import("hasher.zig").Hasher;
 
 pub fn decompress(comptime wrap: Wrapping, input_reader: anytype, output_writer: anytype) !void {
     var inf = decompressor(wrap, input_reader);
@@ -387,7 +344,8 @@ pub fn Inflate(comptime wrap: Wrapping, comptime ReaderType: type) type {
                     if (try self.rdr.read(u32) != self.hasher.bytesRead()) return error.GzipFooterSize;
                 },
                 .zlib => {
-                    if (try self.rdr.read(u32) != self.hasher.chksum()) return error.ZlibFooterChecksum;
+                    const chksum: u32 = @byteSwap(self.hasher.chksum());
+                    if (try self.rdr.read(u32) != chksum) return error.ZlibFooterChecksum;
                 },
                 .raw => {},
             }
@@ -587,7 +545,7 @@ test "zlib decompress" {
                 0x78, 0b10_0_11100, // zlib header (2 bytes)
                 0b0000_0001, 0b0000_1100, 0x00, 0b1111_0011, 0xff, // deflate fixed buffer header len, nlen
                 'H', 'e', 'l', 'l', 'o', ' ', 'w', 'o', 'r', 'l', 'd', 0x0a, // non compressed data
-                0x47, 0x04, 0xf2, 0x1c, // zlib footer: checksum
+                0x1c, 0xf2, 0x04, 0x47, // zlib footer: checksum
             },
             .out = "Hello world\n",
         },
