@@ -34,7 +34,8 @@ const match_lengths_index = [_]u8{
 
 const MatchLength = struct {
     code: u16,
-    base: u8,
+    base_scaled: u8, // base - 3, scaled to fit into u8 (0-255), same as lit_len field in Token.
+    base: u16, // 3-358
     extra_length: u8 = 0,
     extra_bits: u4,
 };
@@ -55,40 +56,38 @@ const MatchLength = struct {
 //  265   1  11,12      275   3   51-58     285   0    258
 //  266   1  13,14      276   3   59-66
 //
-// Base length is scaled down for 3, same as lit_len field in Token.
-//
 pub const length_codes_start = 257;
 
 const match_lengths = [_]MatchLength{
-    .{ .extra_bits = 0, .base = 0, .code = 0 + length_codes_start },
-    .{ .extra_bits = 0, .base = 1, .code = 1 + length_codes_start },
-    .{ .extra_bits = 0, .base = 2, .code = 2 + length_codes_start },
-    .{ .extra_bits = 0, .base = 3, .code = 3 + length_codes_start },
-    .{ .extra_bits = 0, .base = 4, .code = 4 + length_codes_start },
-    .{ .extra_bits = 0, .base = 5, .code = 5 + length_codes_start },
-    .{ .extra_bits = 0, .base = 6, .code = 6 + length_codes_start },
-    .{ .extra_bits = 0, .base = 7, .code = 7 + length_codes_start },
-    .{ .extra_bits = 1, .base = 8, .code = 8 + length_codes_start },
-    .{ .extra_bits = 1, .base = 10, .code = 9 + length_codes_start },
-    .{ .extra_bits = 1, .base = 12, .code = 10 + length_codes_start },
-    .{ .extra_bits = 1, .base = 14, .code = 11 + length_codes_start },
-    .{ .extra_bits = 2, .base = 16, .code = 12 + length_codes_start },
-    .{ .extra_bits = 2, .base = 20, .code = 13 + length_codes_start },
-    .{ .extra_bits = 2, .base = 24, .code = 14 + length_codes_start },
-    .{ .extra_bits = 2, .base = 28, .code = 15 + length_codes_start },
-    .{ .extra_bits = 3, .base = 32, .code = 16 + length_codes_start },
-    .{ .extra_bits = 3, .base = 40, .code = 17 + length_codes_start },
-    .{ .extra_bits = 3, .base = 48, .code = 18 + length_codes_start },
-    .{ .extra_bits = 3, .base = 56, .code = 19 + length_codes_start },
-    .{ .extra_bits = 4, .base = 64, .code = 20 + length_codes_start },
-    .{ .extra_bits = 4, .base = 80, .code = 21 + length_codes_start },
-    .{ .extra_bits = 4, .base = 96, .code = 22 + length_codes_start },
-    .{ .extra_bits = 4, .base = 112, .code = 23 + length_codes_start },
-    .{ .extra_bits = 5, .base = 128, .code = 24 + length_codes_start },
-    .{ .extra_bits = 5, .base = 160, .code = 25 + length_codes_start },
-    .{ .extra_bits = 5, .base = 192, .code = 26 + length_codes_start },
-    .{ .extra_bits = 5, .base = 224, .code = 27 + length_codes_start },
-    .{ .extra_bits = 0, .base = 255, .code = 28 + length_codes_start },
+    .{ .extra_bits = 0, .base_scaled = 0, .base = 3, .code = 257 },
+    .{ .extra_bits = 0, .base_scaled = 1, .base = 4, .code = 258 },
+    .{ .extra_bits = 0, .base_scaled = 2, .base = 5, .code = 259 },
+    .{ .extra_bits = 0, .base_scaled = 3, .base = 6, .code = 260 },
+    .{ .extra_bits = 0, .base_scaled = 4, .base = 7, .code = 261 },
+    .{ .extra_bits = 0, .base_scaled = 5, .base = 8, .code = 262 },
+    .{ .extra_bits = 0, .base_scaled = 6, .base = 9, .code = 263 },
+    .{ .extra_bits = 0, .base_scaled = 7, .base = 10, .code = 264 },
+    .{ .extra_bits = 1, .base_scaled = 8, .base = 11, .code = 265 },
+    .{ .extra_bits = 1, .base_scaled = 10, .base = 13, .code = 266 },
+    .{ .extra_bits = 1, .base_scaled = 12, .base = 15, .code = 267 },
+    .{ .extra_bits = 1, .base_scaled = 14, .base = 17, .code = 268 },
+    .{ .extra_bits = 2, .base_scaled = 16, .base = 19, .code = 269 },
+    .{ .extra_bits = 2, .base_scaled = 20, .base = 23, .code = 270 },
+    .{ .extra_bits = 2, .base_scaled = 24, .base = 27, .code = 271 },
+    .{ .extra_bits = 2, .base_scaled = 28, .base = 31, .code = 272 },
+    .{ .extra_bits = 3, .base_scaled = 32, .base = 35, .code = 273 },
+    .{ .extra_bits = 3, .base_scaled = 40, .base = 43, .code = 274 },
+    .{ .extra_bits = 3, .base_scaled = 48, .base = 51, .code = 275 },
+    .{ .extra_bits = 3, .base_scaled = 56, .base = 59, .code = 276 },
+    .{ .extra_bits = 4, .base_scaled = 64, .base = 67, .code = 277 },
+    .{ .extra_bits = 4, .base_scaled = 80, .base = 83, .code = 278 },
+    .{ .extra_bits = 4, .base_scaled = 96, .base = 99, .code = 279 },
+    .{ .extra_bits = 4, .base_scaled = 112, .base = 115, .code = 280 },
+    .{ .extra_bits = 5, .base_scaled = 128, .base = 131, .code = 281 },
+    .{ .extra_bits = 5, .base_scaled = 160, .base = 163, .code = 282 },
+    .{ .extra_bits = 5, .base_scaled = 192, .base = 195, .code = 283 },
+    .{ .extra_bits = 5, .base_scaled = 224, .base = 227, .code = 284 },
+    .{ .extra_bits = 0, .base_scaled = 255, .base = 258, .code = 285 },
 };
 
 // Used in offsetCode fn to get index in match_offset table for each offset in range 0-32767.
@@ -112,6 +111,7 @@ const match_offsets_index = [_]u8{
 };
 
 const MatchOffset = struct {
+    base_scaled: u16, // base - 1, same as Token off field
     base: u16,
     extra_offset: u16 = 0,
     code: u8,
@@ -134,39 +134,37 @@ const MatchOffset = struct {
 //   8   3  17-24   18   8    513-768   28   13 16385-24576
 //   9   3  25-32   19   8   769-1024   29   13 24577-32768
 //
-// Base distance is scaled down by 1, same as Token off field.
-//
 const match_offsets = [_]MatchOffset{
-    .{ .extra_bits = 0, .base = 0x0000, .code = 0 },
-    .{ .extra_bits = 0, .base = 0x0001, .code = 1 },
-    .{ .extra_bits = 0, .base = 0x0002, .code = 2 },
-    .{ .extra_bits = 0, .base = 0x0003, .code = 3 },
-    .{ .extra_bits = 1, .base = 0x0004, .code = 4 },
-    .{ .extra_bits = 1, .base = 0x0006, .code = 5 },
-    .{ .extra_bits = 2, .base = 0x0008, .code = 6 },
-    .{ .extra_bits = 2, .base = 0x000c, .code = 7 },
-    .{ .extra_bits = 3, .base = 0x0010, .code = 8 },
-    .{ .extra_bits = 3, .base = 0x0018, .code = 9 },
-    .{ .extra_bits = 4, .base = 0x0020, .code = 10 },
-    .{ .extra_bits = 4, .base = 0x0030, .code = 11 },
-    .{ .extra_bits = 5, .base = 0x0040, .code = 12 },
-    .{ .extra_bits = 5, .base = 0x0060, .code = 13 },
-    .{ .extra_bits = 6, .base = 0x0080, .code = 14 },
-    .{ .extra_bits = 6, .base = 0x00c0, .code = 15 },
-    .{ .extra_bits = 7, .base = 0x0100, .code = 16 },
-    .{ .extra_bits = 7, .base = 0x0180, .code = 17 },
-    .{ .extra_bits = 8, .base = 0x0200, .code = 18 },
-    .{ .extra_bits = 8, .base = 0x0300, .code = 19 },
-    .{ .extra_bits = 9, .base = 0x0400, .code = 20 },
-    .{ .extra_bits = 9, .base = 0x0600, .code = 21 },
-    .{ .extra_bits = 10, .base = 0x0800, .code = 22 },
-    .{ .extra_bits = 10, .base = 0x0c00, .code = 23 },
-    .{ .extra_bits = 11, .base = 0x1000, .code = 24 },
-    .{ .extra_bits = 11, .base = 0x1800, .code = 25 },
-    .{ .extra_bits = 12, .base = 0x2000, .code = 26 },
-    .{ .extra_bits = 12, .base = 0x3000, .code = 27 },
-    .{ .extra_bits = 13, .base = 0x4000, .code = 28 },
-    .{ .extra_bits = 13, .base = 0x6000, .code = 29 },
+    .{ .extra_bits = 0, .base_scaled = 0x0000, .code = 0, .base = 1 },
+    .{ .extra_bits = 0, .base_scaled = 0x0001, .code = 1, .base = 2 },
+    .{ .extra_bits = 0, .base_scaled = 0x0002, .code = 2, .base = 3 },
+    .{ .extra_bits = 0, .base_scaled = 0x0003, .code = 3, .base = 4 },
+    .{ .extra_bits = 1, .base_scaled = 0x0004, .code = 4, .base = 5 },
+    .{ .extra_bits = 1, .base_scaled = 0x0006, .code = 5, .base = 7 },
+    .{ .extra_bits = 2, .base_scaled = 0x0008, .code = 6, .base = 9 },
+    .{ .extra_bits = 2, .base_scaled = 0x000c, .code = 7, .base = 13 },
+    .{ .extra_bits = 3, .base_scaled = 0x0010, .code = 8, .base = 17 },
+    .{ .extra_bits = 3, .base_scaled = 0x0018, .code = 9, .base = 25 },
+    .{ .extra_bits = 4, .base_scaled = 0x0020, .code = 10, .base = 33 },
+    .{ .extra_bits = 4, .base_scaled = 0x0030, .code = 11, .base = 49 },
+    .{ .extra_bits = 5, .base_scaled = 0x0040, .code = 12, .base = 65 },
+    .{ .extra_bits = 5, .base_scaled = 0x0060, .code = 13, .base = 97 },
+    .{ .extra_bits = 6, .base_scaled = 0x0080, .code = 14, .base = 129 },
+    .{ .extra_bits = 6, .base_scaled = 0x00c0, .code = 15, .base = 193 },
+    .{ .extra_bits = 7, .base_scaled = 0x0100, .code = 16, .base = 257 },
+    .{ .extra_bits = 7, .base_scaled = 0x0180, .code = 17, .base = 385 },
+    .{ .extra_bits = 8, .base_scaled = 0x0200, .code = 18, .base = 513 },
+    .{ .extra_bits = 8, .base_scaled = 0x0300, .code = 19, .base = 769 },
+    .{ .extra_bits = 9, .base_scaled = 0x0400, .code = 20, .base = 1025 },
+    .{ .extra_bits = 9, .base_scaled = 0x0600, .code = 21, .base = 1537 },
+    .{ .extra_bits = 10, .base_scaled = 0x0800, .code = 22, .base = 2049 },
+    .{ .extra_bits = 10, .base_scaled = 0x0c00, .code = 23, .base = 3073 },
+    .{ .extra_bits = 11, .base_scaled = 0x1000, .code = 24, .base = 4097 },
+    .{ .extra_bits = 11, .base_scaled = 0x1800, .code = 25, .base = 6145 },
+    .{ .extra_bits = 12, .base_scaled = 0x2000, .code = 26, .base = 8193 },
+    .{ .extra_bits = 12, .base_scaled = 0x3000, .code = 27, .base = 12289 },
+    .{ .extra_bits = 13, .base_scaled = 0x4000, .code = 28, .base = 16385 },
+    .{ .extra_bits = 13, .base_scaled = 0x6000, .code = 29, .base = 24577 },
 };
 
 const Token = @This();
@@ -217,12 +215,12 @@ pub fn eql(t: Token, o: Token) bool {
 }
 
 pub fn lengthCode(t: Token) u16 {
-    return @as(u16, match_lengths_index[t.len_lit]) + length_codes_start;
+    return match_lengths[match_lengths_index[t.len_lit]].code;
 }
 
 pub fn lengthEncoding(t: Token) MatchLength {
     var c = match_lengths[match_lengths_index[t.len_lit]];
-    c.extra_length = t.len_lit - c.base;
+    c.extra_length = t.len_lit - c.base_scaled;
     return c;
 }
 
@@ -243,12 +241,20 @@ pub fn offsetCode(t: Token) u8 {
 
 pub fn offsetEncoding(t: Token) MatchOffset {
     var c = match_offsets[t.offsetCode()];
-    c.extra_offset = t.off - c.base;
+    c.extra_offset = t.off - c.base_scaled;
     return c;
 }
 
 pub fn lengthExtraBits(code: u32) u8 {
     return match_lengths[code - length_codes_start].extra_bits;
+}
+
+pub fn matchLength(code: u8) MatchLength {
+    return match_lengths[code];
+}
+
+pub fn matchOffset(code: u8) MatchOffset {
+    return match_offsets[code];
 }
 
 pub fn offsetExtraBits(code: u32) u8 {
@@ -303,4 +309,16 @@ test "MatchOffset" {
     try expect(c.code == 14);
     try expect(c.extra_bits == 6);
     try expect(c.extra_offset == 192 - 129);
+}
+
+test "match_lengths" {
+    for (match_lengths, 0..) |ml, i| {
+        try expect(@as(u16, ml.base_scaled) + 3 == ml.base);
+        try expect(i + 257 == ml.code);
+    }
+
+    for (match_offsets, 0..) |mo, i| {
+        try expect(mo.base_scaled + 1 == mo.base);
+        try expect(i == mo.code);
+    }
 }

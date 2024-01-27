@@ -7,6 +7,7 @@ const BitReader = @import("bit_reader.zig").BitReader;
 const SlidingWindow = @import("sliding_window.zig").SlidingWindow;
 const consts = @import("consts.zig");
 const Wrapper = @import("wrapper.zig").Wrapper;
+const Token = @import("Token.zig");
 
 pub fn decompress(comptime wrap: Wrapper, input_reader: anytype, output_writer: anytype) !void {
     var inf = decompressor(wrap, input_reader);
@@ -56,20 +57,20 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
 
         inline fn decodeLength(self: *Self, code: u8) !u16 {
             assert(code <= 28);
-            const bl = backwardLength(code);
-            return if (bl.extra_bits == 0)
-                bl.base_length
+            const ml = Token.matchLength(code);
+            return if (ml.extra_bits == 0)
+                ml.base
             else
-                bl.base_length + self.rdr.readBufferedBits(bl.extra_bits);
+                ml.base + self.rdr.readBufferedBits(ml.extra_bits);
         }
 
         inline fn decodeDistance(self: *Self, code: u8) !u16 {
             assert(code <= 29);
-            const bd = backwardDistance(code);
-            return if (bd.extra_bits == 0)
-                bd.base_distance
+            const mo = Token.matchOffset(code);
+            return if (mo.extra_bits == 0)
+                mo.base
             else
-                bd.base_distance + self.rdr.readBufferedBits(bd.extra_bits);
+                mo.base + self.rdr.readBufferedBits(mo.extra_bits);
         }
 
         fn nonCompressedBlock(self: *Self) !bool {
@@ -302,89 +303,6 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
         }
     };
 }
-
-fn backwardLength(c: u16) BackwardLength {
-    return backward_lengths[c];
-}
-
-const BackwardLength = struct {
-    base_length: u16,
-    extra_bits: u4,
-};
-
-const backward_lengths = [_]BackwardLength{
-    .{ .extra_bits = 0, .base_length = 3 }, // code = 257
-    .{ .extra_bits = 0, .base_length = 4 }, // code = 258
-    .{ .extra_bits = 0, .base_length = 5 }, // code = 259
-    .{ .extra_bits = 0, .base_length = 6 }, // code = 260
-    .{ .extra_bits = 0, .base_length = 7 }, // code = 261
-    .{ .extra_bits = 0, .base_length = 8 }, // code = 262
-    .{ .extra_bits = 0, .base_length = 9 }, // code = 263
-    .{ .extra_bits = 0, .base_length = 10 }, // code = 264
-    .{ .extra_bits = 1, .base_length = 11 }, // code = 265
-    .{ .extra_bits = 1, .base_length = 13 }, // code = 266
-    .{ .extra_bits = 1, .base_length = 15 }, // code = 267
-    .{ .extra_bits = 1, .base_length = 17 }, // code = 268
-    .{ .extra_bits = 2, .base_length = 19 }, // code = 269
-    .{ .extra_bits = 2, .base_length = 23 }, // code = 270
-    .{ .extra_bits = 2, .base_length = 27 }, // code = 271
-    .{ .extra_bits = 2, .base_length = 31 }, // code = 272
-    .{ .extra_bits = 3, .base_length = 35 }, // code = 273
-    .{ .extra_bits = 3, .base_length = 43 }, // code = 274
-    .{ .extra_bits = 3, .base_length = 51 }, // code = 275
-    .{ .extra_bits = 3, .base_length = 59 }, // code = 276
-    .{ .extra_bits = 4, .base_length = 67 }, // code = 277
-    .{ .extra_bits = 4, .base_length = 83 }, // code = 278
-    .{ .extra_bits = 4, .base_length = 99 }, // code = 279
-    .{ .extra_bits = 4, .base_length = 115 }, // code = 280
-    .{ .extra_bits = 5, .base_length = 131 }, // code = 281
-    .{ .extra_bits = 5, .base_length = 163 }, // code = 282
-    .{ .extra_bits = 5, .base_length = 195 }, // code = 283
-    .{ .extra_bits = 5, .base_length = 227 }, // code = 284
-    .{ .extra_bits = 0, .base_length = 258 }, // code = 285
-};
-
-fn backwardDistance(c: u8) BackwardDistance {
-    return backward_distances[c];
-}
-
-const BackwardDistance = struct {
-    base_distance: u16,
-    extra_bits: u4,
-};
-
-const backward_distances = [_]BackwardDistance{
-    .{ .extra_bits = 0, .base_distance = 1 }, // code = 0
-    .{ .extra_bits = 0, .base_distance = 2 }, // code = 1
-    .{ .extra_bits = 0, .base_distance = 3 }, // code = 2
-    .{ .extra_bits = 0, .base_distance = 4 }, // code = 3
-    .{ .extra_bits = 1, .base_distance = 5 }, // code = 4
-    .{ .extra_bits = 1, .base_distance = 7 }, // code = 5
-    .{ .extra_bits = 2, .base_distance = 9 }, // code = 6
-    .{ .extra_bits = 2, .base_distance = 13 }, // code = 7
-    .{ .extra_bits = 3, .base_distance = 17 }, // code = 8
-    .{ .extra_bits = 3, .base_distance = 25 }, // code = 9
-    .{ .extra_bits = 4, .base_distance = 33 }, // code = 10
-    .{ .extra_bits = 4, .base_distance = 49 }, // code = 11
-    .{ .extra_bits = 5, .base_distance = 65 }, // code = 12
-    .{ .extra_bits = 5, .base_distance = 97 }, // code = 13
-    .{ .extra_bits = 6, .base_distance = 129 }, // code = 14
-    .{ .extra_bits = 6, .base_distance = 193 }, // code = 15
-    .{ .extra_bits = 7, .base_distance = 257 }, // code = 16
-    .{ .extra_bits = 7, .base_distance = 385 }, // code = 17
-    .{ .extra_bits = 8, .base_distance = 513 }, // code = 18
-    .{ .extra_bits = 8, .base_distance = 769 }, // code = 19
-    .{ .extra_bits = 9, .base_distance = 1025 }, // code = 20
-    .{ .extra_bits = 9, .base_distance = 1537 }, // code = 21
-    .{ .extra_bits = 10, .base_distance = 2049 }, // code = 22
-    .{ .extra_bits = 10, .base_distance = 3073 }, // code = 23
-    .{ .extra_bits = 11, .base_distance = 4097 }, // code = 24
-    .{ .extra_bits = 11, .base_distance = 6145 }, // code = 25
-    .{ .extra_bits = 12, .base_distance = 8193 }, // code = 26
-    .{ .extra_bits = 12, .base_distance = 12289 }, // code = 27
-    .{ .extra_bits = 13, .base_distance = 16385 }, // code = 28
-    .{ .extra_bits = 13, .base_distance = 24577 }, // code = 29
-};
 
 test "flate decompress" {
     const cases = [_]struct {
