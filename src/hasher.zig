@@ -4,6 +4,28 @@ pub const Wrapping = enum {
     raw, // no header or footer
     gzip, // gzip header and footer
     zlib, // zlib header and footer
+
+    pub fn size(w: Wrapping) usize {
+        return headerSize(w) + footerSize(w);
+    }
+
+    pub fn headerSize(w: Wrapping) usize {
+        return switch (w) {
+            .gzip => 10,
+            .zlib => 2,
+            .raw => 0,
+        };
+    }
+
+    pub fn footerSize(w: Wrapping) usize {
+        return switch (w) {
+            .gzip => 8,
+            .zlib => 4,
+            .raw => 0,
+        };
+    }
+
+    pub const list = [_]Wrapping{ .raw, .gzip, .zlib };
 };
 
 pub fn Hasher(comptime wrap: Wrapping) type {

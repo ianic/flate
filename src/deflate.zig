@@ -360,11 +360,10 @@ test "deflate: tokenization" {
     };
 
     for (cases) |c| {
-        // raw
-        {
+        inline for (Wrapping.list) |wrap| { // for each wrapping
             var cw = io.countingWriter(io.null_writer);
             const cww = cw.writer();
-            var df = try Deflate(.raw, @TypeOf(cww), TestTokenWriter).init(cww, .{});
+            var df = try Deflate(wrap, @TypeOf(cww), TestTokenWriter).init(cww, .{});
 
             _ = try df.write(c.data);
             try df.flush();
@@ -373,41 +372,9 @@ test "deflate: tokenization" {
             try expect(df.token_writer.pos == c.tokens.len); // number of tokens written
             try testing.expectEqualSlices(Token, df.token_writer.get(), c.tokens); // tokens match
 
-            try testing.expectEqual(0, cw.bytes_written);
+            try testing.expectEqual(wrap.headerSize(), cw.bytes_written);
             try df.close();
-            try testing.expectEqual(0, cw.bytes_written);
-        }
-        // gzip
-        {
-            var cw = io.countingWriter(io.null_writer);
-            const cww = cw.writer();
-            var df = try Deflate(.gzip, @TypeOf(cww), TestTokenWriter).init(cww, .{});
-
-            _ = try df.write(c.data);
-            try df.flush();
-
-            try expect(df.token_writer.pos == c.tokens.len); // number of tokens written
-            try testing.expectEqualSlices(Token, df.token_writer.get(), c.tokens); // tokens match
-
-            try testing.expectEqual(10, cw.bytes_written); // gzip header
-            try df.close();
-            try testing.expectEqual(10 + 8, cw.bytes_written); // footer is added
-        }
-        // zlib
-        {
-            var cw = io.countingWriter(io.null_writer);
-            const cww = cw.writer();
-            var df = try Deflate(.zlib, @TypeOf(cww), TestTokenWriter).init(cww, .{});
-
-            _ = try df.write(c.data);
-            try df.flush();
-
-            try expect(df.token_writer.pos == c.tokens.len); // number of tokens written
-            try testing.expectEqualSlices(Token, df.token_writer.get(), c.tokens); // tokens match
-
-            try testing.expectEqual(2, cw.bytes_written); // zlib header
-            try df.close();
-            try testing.expectEqual(2 + 4, cw.bytes_written); // footer is added
+            try testing.expectEqual(wrap.size(), cw.bytes_written);
         }
     }
 }
