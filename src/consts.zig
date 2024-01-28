@@ -24,12 +24,6 @@ pub const lookup = struct {
     pub const shift = 32 - bits;
 };
 
-// TODO: organize this
-
-// Huffman Codes
-
-// Deflate
-
 // Biggest block size for uncompressed block.
 pub const max_store_block_size = 65535;
 // The special code used to mark the end of a block.
@@ -49,6 +43,4 @@ pub const huffman = struct {
     pub const max_num_frequencies = max_num_lit;
     // Maximum number of literals.
     pub const max_num_lit = 286;
-
-    pub const literal_code_count = max_num_lit;
 };

@@ -95,22 +95,12 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
 
         fn fixedBlock(self: *Self) !bool {
             while (!self.windowFull()) {
-                try self.rdr.ensureBits(7 + 2, 7);
-                const code7 = self.rdr.readBufferedCode(u7);
-
-                if (code7 < 0b0010_111) { // 7 bits, 256-279, codes 0000_000 - 0010_111
-                    if (code7 == 0) return true; // end of block code 256
-                    try self.fixedDistanceCode(code7);
-                } else if (code7 < 0b1011_111) { // 8 bits, 0-143, codes 0011_0000 through 1011_1111
-                    const lit: u8 = (@as(u8, code7 - 0b0011_000) << 1) + self.rdr.readBuffered(u1);
-                    self.win.write(lit);
-                } else if (code7 <= 0b1100_011) { // 8 bit, 280-287, codes 1100_0000 - 1100_0111
-                    // TODO hit this branch in test
-                    const code: u8 = (@as(u8, code7 - 0b1100011) << 1) + self.rdr.readBuffered(u1) + (280 - 257);
-                    try self.fixedDistanceCode(code);
-                } else { // 9 bit, 144-255, codes 1_1001_0000 - 1_1111_1111
-                    const lit: u8 = (@as(u8, code7 - 0b1100_100) << 2) + self.rdr.readBufferedCode(u2) + 144;
-                    self.win.write(lit);
+                const code = try self.rdr.readFixedCode();
+                switch (code) {
+                    0...255 => self.win.write(@intCast(code)),
+                    256 => return true, // end of block
+                    257...285 => try self.fixedDistanceCode(@intCast(code - 257)),
+                    else => return error.Deflate,
                 }
             }
             return false;
@@ -265,6 +255,7 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
 
         pub const Error = ReaderType.Error || error{
             EndOfStream,
+            Deflate,
             DeflateWrongNlen,
             GzipFooterChecksum,
             GzipFooterSize,

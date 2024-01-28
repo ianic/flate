@@ -146,6 +146,20 @@ pub fn BitReader(comptime ReaderType: type) type {
                 if (try self.read(u8) == 0) break;
             }
         }
+
+        pub fn readFixedCode(self: *Self) !u16 {
+            try self.ensureBits(7 + 2, 7);
+            const code7 = self.readBufferedCode(u7);
+            if (code7 <= 0b0010_111) { // 7 bits, 256-279, codes 0000_000 - 0010_111
+                return @as(u16, code7) + 256;
+            } else if (code7 <= 0b1011_111) { // 8 bits, 0-143, codes 0011_0000 through 1011_1111
+                return (@as(u16, code7) << 1) + self.readBuffered(u1) - 0b0011_0000;
+            } else if (code7 <= 0b1100_011) { // 8 bit, 280-287, codes 1100_0000 - 1100_0111
+                return (@as(u16, code7 - 0b1100000) << 1) + self.readBuffered(u1) + 280;
+            } else { // 9 bit, 144-255, codes 1_1001_0000 - 1_1111_1111
+                return (@as(u16, code7 - 0b1100_100) << 2) + self.readBufferedCode(u2) + 144;
+            }
+        }
     };
 }
 
@@ -247,4 +261,16 @@ test "BitReader readAll" {
     try testing.expect(br.bits == 0);
 
     try testing.expectEqualSlices(u8, data[0..16], &out);
+}
+
+test "BitReader readFixedCode" {
+    const fixed_codes = @import("huffman_encoder.zig").fixed_codes;
+
+    var fbs = std.io.fixedBufferStream(&fixed_codes);
+    var rdr = bitReader(fbs.reader());
+
+    for (0..286) |c| {
+        try testing.expectEqual(c, try rdr.readFixedCode());
+    }
+    try testing.expect(rdr.eos == 0);
 }
