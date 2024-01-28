@@ -746,11 +746,10 @@ test "writeBlockHuff" {
         "huffman-shifts.input",
         "huffman-shifts.golden",
     );
-    // TODO fails on windows in github ci
-    // try testBlockHuff(
-    //     "huffman-text.input",
-    //     "huffman-text.golden",
-    // );
+    try testBlockHuff(
+        "huffman-text.input",
+        "huffman-text.golden",
+    );
     try testBlockHuff(
         "huffman-text-shift.input",
         "huffman-text-shift.golden",
