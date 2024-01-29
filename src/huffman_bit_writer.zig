@@ -22,11 +22,7 @@ fn BitWriter(comptime WriterType: type) type {
     const buffer_size = buffer_flush_size + 8;
 
     return struct {
-        // writer is the underlying writer.
-        // Do not use it directly; use the write method, which ensures
-        // that Write errors are sticky.
         inner_writer: WriterType,
-        bytes_written: usize = 0,
 
         // Data waiting to be written is bytes[0 .. nbytes]
         // and then the low nbits of bits.  Data is always written
@@ -46,7 +42,6 @@ fn BitWriter(comptime WriterType: type) type {
 
         fn reset(self: *Self, new_writer: WriterType) void {
             self.inner_writer = new_writer;
-            self.bytes_written = 0;
             self.bits = 0;
             self.nbits = 0;
             self.nbytes = 0;
@@ -65,12 +60,8 @@ fn BitWriter(comptime WriterType: type) type {
                 n += 1;
             }
             self.bits = 0;
-            try self.write(self.bytes[0..n]);
+            _ = try self.inner_writer.write(self.bytes[0..n]);
             self.nbytes = 0;
-        }
-
-        fn write(self: *Self, b: []const u8) Error!void {
-            self.bytes_written += try self.inner_writer.write(b);
         }
 
         fn writeBits(self: *Self, b: u32, nb: u32) Error!void {
@@ -90,7 +81,7 @@ fn BitWriter(comptime WriterType: type) type {
                 bytes[5] = @as(u8, @truncate(bits >> 40));
                 n += 6;
                 if (n >= buffer_flush_size) {
-                    try self.write(self.bytes[0..n]);
+                    _ = try self.inner_writer.write(self.bytes[0..n]);
                     n = 0;
                 }
                 self.nbytes = n;
@@ -109,34 +100,10 @@ fn BitWriter(comptime WriterType: type) type {
                 n += 1;
             }
             if (n != 0) {
-                try self.write(self.bytes[0..n]);
+                _ = try self.inner_writer.write(self.bytes[0..n]);
             }
             self.nbytes = 0;
-            try self.write(bytes);
-        }
-
-        fn writeCode(self: *Self, c: hc.HuffCode) Error!void {
-            self.bits |= @as(u64, @intCast(c.code)) << @as(u6, @intCast(self.nbits));
-            self.nbits += @as(u32, @intCast(c.len));
-            if (self.nbits >= 48) {
-                const bits = self.bits;
-                self.bits >>= 48;
-                self.nbits -= 48;
-                var n = self.nbytes;
-                var bytes = self.bytes[n..][0..6];
-                bytes[0] = @as(u8, @truncate(bits));
-                bytes[1] = @as(u8, @truncate(bits >> 8));
-                bytes[2] = @as(u8, @truncate(bits >> 16));
-                bytes[3] = @as(u8, @truncate(bits >> 24));
-                bytes[4] = @as(u8, @truncate(bits >> 32));
-                bytes[5] = @as(u8, @truncate(bits >> 40));
-                n += 6;
-                if (n >= buffer_flush_size) {
-                    try self.write(self.bytes[0..n]);
-                    n = 0;
-                }
-                self.nbytes = n;
-            }
+            _ = try self.inner_writer.write(bytes);
         }
     };
 }
@@ -191,12 +158,8 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
             try self.bit_writer.flush();
         }
 
-        fn writeBits(self: *Self, b: u32, nb: u32) Error!void {
-            try self.bit_writer.writeBits(b, nb);
-        }
-
-        fn writeBytes(self: *Self, bytes: []const u8) Error!void {
-            try self.bit_writer.writeBytes(bytes);
+        inline fn writeCode(self: *Self, c: hc.HuffCode) Error!void {
+            try self.bit_writer.writeBits(c.code, c.len);
         }
 
         // RFC 1951 3.2.7 specifies a special run-length encoding for specifying
@@ -355,10 +318,6 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
             return .{ .size = 0, .storable = false };
         }
 
-        fn writeCode(self: *Self, c: hc.HuffCode) Error!void {
-            try self.bit_writer.writeCode(c);
-        }
-
         // Write the header of a dynamic Huffman block to the output stream.
         //
         //  num_literals: The number of literals specified in codegen
@@ -373,15 +332,15 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
             eof: bool,
         ) Error!void {
             const first_bits: u32 = if (eof) 5 else 4;
-            try self.writeBits(first_bits, 3);
-            try self.writeBits(num_literals - 257, 5);
-            try self.writeBits(num_offsets - 1, 5);
-            try self.writeBits(num_codegens - 4, 4);
+            try self.bit_writer.writeBits(first_bits, 3);
+            try self.bit_writer.writeBits(num_literals - 257, 5);
+            try self.bit_writer.writeBits(num_offsets - 1, 5);
+            try self.bit_writer.writeBits(num_codegens - 4, 4);
 
             var i: u32 = 0;
             while (i < num_codegens) : (i += 1) {
                 const value = self.codegen_encoding.codes[codegen_order[i]].len;
-                try self.writeBits(value, 3);
+                try self.bit_writer.writeBits(value, 3);
             }
 
             i = 0;
@@ -395,15 +354,15 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
 
                 switch (code_word) {
                     16 => {
-                        try self.writeBits(self.codegen[i], 2);
+                        try self.bit_writer.writeBits(self.codegen[i], 2);
                         i += 1;
                     },
                     17 => {
-                        try self.writeBits(self.codegen[i], 3);
+                        try self.bit_writer.writeBits(self.codegen[i], 3);
                         i += 1;
                     },
                     18 => {
-                        try self.writeBits(self.codegen[i], 7);
+                        try self.bit_writer.writeBits(self.codegen[i], 7);
                         i += 1;
                     },
                     else => {},
@@ -413,11 +372,11 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
 
         fn writeStoredHeader(self: *Self, length: usize, eof: bool) Error!void {
             const flag: u32 = if (eof) 1 else 0;
-            try self.writeBits(flag, 3);
+            try self.bit_writer.writeBits(flag, 3);
             try self.flush();
             const l: u16 = @intCast(length);
-            try self.writeBits(l, 16);
-            try self.writeBits(~l, 16);
+            try self.bit_writer.writeBits(l, 16);
+            try self.bit_writer.writeBits(~l, 16);
         }
 
         fn writeFixedHeader(self: *Self, eof: bool) Error!void {
@@ -426,7 +385,7 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
             if (eof) {
                 value = 3;
             }
-            try self.writeBits(value, 3);
+            try self.bit_writer.writeBits(value, 3);
         }
 
         // Write a block of tokens with the smallest encoding.
@@ -519,7 +478,7 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
 
         fn writeBlockStored(self: *Self, input: []const u8, eof: bool) Error!void {
             try self.writeStoredHeader(input.len, eof);
-            try self.writeBytes(input);
+            try self.bit_writer.writeBytes(input);
         }
 
         // writeBlockDynamic encodes a block using a dynamic Huffman table.
@@ -640,14 +599,14 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
                 const le = t.lengthEncoding();
                 try self.writeCode(le_codes[le.code]);
                 if (le.extra_bits > 0) {
-                    try self.writeBits(le.extra_length, le.extra_bits);
+                    try self.bit_writer.writeBits(le.extra_length, le.extra_bits);
                 }
 
                 // Write the offset
                 const oe = t.offsetEncoding();
                 try self.writeCode(oe_codes[oe.code]);
                 if (oe.extra_bits > 0) {
-                    try self.writeBits(oe.extra_offset, oe.extra_bits);
+                    try self.bit_writer.writeBits(oe.extra_offset, oe.extra_bits);
                 }
             }
             // add end_block_marker at the end
@@ -709,7 +668,7 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
 
             for (input) |t| {
                 const c = encoding[t];
-                try self.writeBits(c.code, c.len);
+                try self.bit_writer.writeBits(c.code, c.len);
             }
             try self.writeCode(encoding[consts.end_block_marker]);
         }
