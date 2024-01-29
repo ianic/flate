@@ -513,7 +513,7 @@ test "check struct sizes" {
 
     const Hbw = hbw.HuffmanBitWriter(@TypeOf(io.null_writer));
     // huffman bit writer internal: 11480
-    const hbw_size = 11480; // 11.2k
+    const hbw_size = 11472; // 11.2k
     try expect(@sizeOf(Hbw) == hbw_size);
 
     //const D = Deflate(Hbw);
