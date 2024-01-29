@@ -9,72 +9,39 @@ const codegen_code_count = consts.huffman.codegen_code_count;
 
 const bad_code = 255;
 
-// buffer_flush_size indicates the buffer size
-// after which bytes are flushed to the writer.
-// Should preferably be a multiple of 6, since
-// we accumulate 6 bytes between writes to the buffer.
-const buffer_flush_size = 240;
+fn BitWriter(comptime WriterType: type) type {
+    // buffer_flush_size indicates the buffer size
+    // after which bytes are flushed to the writer.
+    // Should preferably be a multiple of 6, since
+    // we accumulate 6 bytes between writes to the buffer.
+    const buffer_flush_size = 240;
 
-// buffer_size is the actual output byte buffer size.
-// It must have additional headroom for a flush
-// which can contain up to 8 bytes.
-const buffer_size = buffer_flush_size + 8;
+    // buffer_size is the actual output byte buffer size.
+    // It must have additional headroom for a flush
+    // which can contain up to 8 bytes.
+    const buffer_size = buffer_flush_size + 8;
 
-pub fn HuffmanBitWriter(comptime WriterType: type) type {
     return struct {
-        const Self = @This();
-        pub const Error = WriterType.Error || error{UnfinishedBits};
-
         // writer is the underlying writer.
         // Do not use it directly; use the write method, which ensures
         // that Write errors are sticky.
         inner_writer: WriterType,
-        bytes_written: usize,
+        bytes_written: usize = 0,
 
         // Data waiting to be written is bytes[0 .. nbytes]
         // and then the low nbits of bits.  Data is always written
         // sequentially into the bytes array.
-        bits: u64,
-        nbits: u32, // number of bits
-        bytes: [buffer_size]u8,
-        codegen_freq: [codegen_code_count]u16,
-        nbytes: u32, // number of bytes
-        literal_freq: [consts.huffman.max_num_lit]u16,
-        offset_freq: [consts.huffman.offset_code_count]u16,
-        codegen: [consts.huffman.max_num_lit + consts.huffman.offset_code_count + 1]u8,
-        literal_encoding: hc.LiteralEncoder,
-        offset_encoding: hc.OffsetEncoder,
-        codegen_encoding: hc.CodegenEncoder,
-        fixed_literal_encoding: hc.LiteralEncoder,
-        fixed_offset_encoding: hc.OffsetEncoder,
-        huff_offset: hc.OffsetEncoder,
+        bits: u64 = 0,
+        nbits: u32 = 0, // number of bits
+        bytes: [buffer_size]u8 = undefined,
+        nbytes: u32 = 0, // number of bytes
+
+        const Self = @This();
+
+        pub const Error = WriterType.Error || error{UnfinishedBits};
 
         pub fn init(writer: WriterType) Self {
-            var offset_freq = [1]u16{0} ** consts.huffman.offset_code_count;
-            offset_freq[0] = 1;
-            // huff_offset is a static offset encoder used for huffman only encoding.
-            // It can be reused since we will not be encoding offset values.
-            var huff_offset: hc.OffsetEncoder = .{};
-            huff_offset.generate(offset_freq[0..], 15);
-
-            return .{
-                .inner_writer = writer,
-                .bytes_written = 0,
-                .bits = 0,
-                .nbits = 0,
-                .nbytes = 0,
-                .bytes = undefined,
-                .codegen_freq = undefined,
-                .literal_freq = undefined,
-                .offset_freq = undefined,
-                .codegen = undefined,
-                .literal_encoding = .{},
-                .codegen_encoding = .{},
-                .offset_encoding = .{},
-                .fixed_literal_encoding = hc.fixedLiteralEncoder(),
-                .fixed_offset_encoding = hc.fixedOffsetEncoder(),
-                .huff_offset = huff_offset,
-            };
+            return .{ .inner_writer = writer };
         }
 
         fn reset(self: *Self, new_writer: WriterType) void {
@@ -146,6 +113,90 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
             }
             self.nbytes = 0;
             try self.write(bytes);
+        }
+
+        fn writeCode(self: *Self, c: hc.HuffCode) Error!void {
+            self.bits |= @as(u64, @intCast(c.code)) << @as(u6, @intCast(self.nbits));
+            self.nbits += @as(u32, @intCast(c.len));
+            if (self.nbits >= 48) {
+                const bits = self.bits;
+                self.bits >>= 48;
+                self.nbits -= 48;
+                var n = self.nbytes;
+                var bytes = self.bytes[n..][0..6];
+                bytes[0] = @as(u8, @truncate(bits));
+                bytes[1] = @as(u8, @truncate(bits >> 8));
+                bytes[2] = @as(u8, @truncate(bits >> 16));
+                bytes[3] = @as(u8, @truncate(bits >> 24));
+                bytes[4] = @as(u8, @truncate(bits >> 32));
+                bytes[5] = @as(u8, @truncate(bits >> 40));
+                n += 6;
+                if (n >= buffer_flush_size) {
+                    try self.write(self.bytes[0..n]);
+                    n = 0;
+                }
+                self.nbytes = n;
+            }
+        }
+    };
+}
+
+pub fn HuffmanBitWriter(comptime WriterType: type) type {
+    const BitWriterType = BitWriter(WriterType);
+    return struct {
+        const Self = @This();
+
+        pub const Error = BitWriterType.Error;
+        bit_writer: BitWriterType,
+
+        codegen_freq: [codegen_code_count]u16,
+        literal_freq: [consts.huffman.max_num_lit]u16,
+        offset_freq: [consts.huffman.offset_code_count]u16,
+        codegen: [consts.huffman.max_num_lit + consts.huffman.offset_code_count + 1]u8,
+        literal_encoding: hc.LiteralEncoder,
+        offset_encoding: hc.OffsetEncoder,
+        codegen_encoding: hc.CodegenEncoder,
+        fixed_literal_encoding: hc.LiteralEncoder,
+        fixed_offset_encoding: hc.OffsetEncoder,
+        huff_offset: hc.OffsetEncoder,
+
+        pub fn init(writer: WriterType) Self {
+            var offset_freq = [1]u16{0} ** consts.huffman.offset_code_count;
+            offset_freq[0] = 1;
+            // huff_offset is a static offset encoder used for huffman only encoding.
+            // It can be reused since we will not be encoding offset values.
+            var huff_offset: hc.OffsetEncoder = .{};
+            huff_offset.generate(offset_freq[0..], 15);
+
+            return .{
+                .bit_writer = BitWriterType.init(writer),
+                .codegen_freq = undefined,
+                .literal_freq = undefined,
+                .offset_freq = undefined,
+                .codegen = undefined,
+                .literal_encoding = .{},
+                .codegen_encoding = .{},
+                .offset_encoding = .{},
+                .fixed_literal_encoding = hc.fixedLiteralEncoder(),
+                .fixed_offset_encoding = hc.fixedOffsetEncoder(),
+                .huff_offset = huff_offset,
+            };
+        }
+
+        fn reset(self: *Self, new_writer: WriterType) void {
+            self.bit_writer.reset(new_writer);
+        }
+
+        pub fn flush(self: *Self) Error!void {
+            try self.bit_writer.flush();
+        }
+
+        fn writeBits(self: *Self, b: u32, nb: u32) Error!void {
+            try self.bit_writer.writeBits(b, nb);
+        }
+
+        fn writeBytes(self: *Self, bytes: []const u8) Error!void {
+            try self.bit_writer.writeBytes(bytes);
         }
 
         // RFC 1951 3.2.7 specifies a special run-length encoding for specifying
@@ -305,27 +356,7 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
         }
 
         fn writeCode(self: *Self, c: hc.HuffCode) Error!void {
-            self.bits |= @as(u64, @intCast(c.code)) << @as(u6, @intCast(self.nbits));
-            self.nbits += @as(u32, @intCast(c.len));
-            if (self.nbits >= 48) {
-                const bits = self.bits;
-                self.bits >>= 48;
-                self.nbits -= 48;
-                var n = self.nbytes;
-                var bytes = self.bytes[n..][0..6];
-                bytes[0] = @as(u8, @truncate(bits));
-                bytes[1] = @as(u8, @truncate(bits >> 8));
-                bytes[2] = @as(u8, @truncate(bits >> 16));
-                bytes[3] = @as(u8, @truncate(bits >> 24));
-                bytes[4] = @as(u8, @truncate(bits >> 32));
-                bytes[5] = @as(u8, @truncate(bits >> 40));
-                n += 6;
-                if (n >= buffer_flush_size) {
-                    try self.write(self.bytes[0..n]);
-                    n = 0;
-                }
-                self.nbytes = n;
-            }
+            try self.bit_writer.writeCode(c);
         }
 
         // Write the header of a dynamic Huffman block to the output stream.
