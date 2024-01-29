@@ -39,6 +39,14 @@ pub fn run(output: anytype, opt: Options) !void {
             },
         }
     } else {
+        if (opt.level == 0) {
+            switch (opt.alg) {
+                .deflate => try flate.compressHuffmanOnly(input, output),
+                .zlib => try zlib.compressHuffmanOnly(input, output),
+                .gzip => try gzip.compressHuffmanOnly(input, output),
+            }
+            return;
+        }
         //var fbs = std.io.fixedBufferStream(input);
         const f_opt: flate.Options = .{ .level = @enumFromInt(opt.level) };
         switch (opt.alg) {
@@ -130,8 +138,8 @@ pub fn readArgs() !?Options {
         if (std.mem.eql(u8, a, "-l")) {
             if (args.next()) |i| {
                 opt.level = try std.fmt.parseInt(u8, i, 10);
-                if (opt.level > 9 or opt.level < 4) {
-                    print("Compression level must be in range 4-9!\n", .{});
+                if (!(opt.level == 0 or (opt.level >= 4 and opt.level <= 9))) {
+                    print("Compression level must be in range 4-9 or 0 for huffman only!\n", .{});
                     return error.InvalidArgs;
                 }
             } else {

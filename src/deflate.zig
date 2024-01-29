@@ -1,9 +1,9 @@
 const std = @import("std");
+const io = std.io;
 const assert = std.debug.assert;
 const testing = std.testing;
 const expect = testing.expect;
 const print = std.debug.print;
-const io = std.io;
 
 const Token = @import("Token.zig");
 const consts = @import("consts.zig");
@@ -12,12 +12,12 @@ const Wrapper = @import("wrapper.zig").Wrapper;
 
 pub const Level = enum(u4) {
     // zig fmt: off
-    fast = 0xa,    level_4 = 4,
-                   level_5 = 5,
-    default = 0xb, level_6 = 6,
-                   level_7 = 7,
-                   level_8 = 8,
-    best = 0xc,    level_9 = 9,
+    fast = 0xb,         level_4 = 4,
+                        level_5 = 5,
+    default = 0xc,      level_6 = 6,
+                        level_7 = 7,
+                        level_8 = 8,
+    best = 0xd,         level_9 = 9,
     // zig fmt: on
 };
 
@@ -61,6 +61,15 @@ pub fn compressor(comptime wrap: Wrapper, writer: anytype, options: Options) !De
     return try Deflate(wrap, WriterType, TokenWriter).init(writer, options);
 }
 
+// Default compression algorithm. First finds tokens from the non compressed
+// input data. Acumulates `const.block.tokens` number of tokens and then passes
+// them to the `token_writer`. Client has to call `close` to write block with
+// the final bit set.
+//
+// Level defines how hard (how slow) it tries to find match.
+//
+// Wrapper puts header and footer for gzip or zlib, they both share same
+// deflate body. Raw has no header or footer just deflate body.
 fn Deflate(comptime wrap: Wrapper, comptime WriterType: type, comptime TokenWriter: type) type {
     return struct {
         lookup: Lookup = .{},
@@ -262,6 +271,86 @@ fn Deflate(comptime wrap: Wrapper, comptime WriterType: type, comptime TokenWrit
                 try self.tokenize(.none);
                 // no more data in reader
                 if (n < buf.len) break;
+            }
+        }
+
+        // Writer interface
+
+        pub const Writer = io.Writer(*Self, Error, write);
+        pub const Error = TokenWriter.Error;
+
+        pub fn writer(self: *Self) Writer {
+            return .{ .context = self };
+        }
+
+        // header and footer
+        fn writeHeader(self: *Self) !void {
+            try wrap.writeHeader(self.wrt);
+        }
+
+        fn writeFooter(self: *Self) !void {
+            try wrap.writeFooter(&self.hasher, self.wrt);
+        }
+    };
+}
+
+pub fn compressHuffmanOnly(comptime wrap: Wrapper, reader: anytype, writer: anytype) !void {
+    var df = try huffmanOnlyCompressor(wrap, writer);
+    try df.stream(reader);
+    try df.close();
+}
+
+pub fn huffmanOnlyCompressor(comptime wrap: Wrapper, writer: anytype) !DeflateHuffmanOnly(
+    wrap,
+    @TypeOf(writer),
+    hbw.HuffmanBitWriter(@TypeOf(writer)),
+) {
+    const WriterType = @TypeOf(writer);
+    const TokenWriter = hbw.HuffmanBitWriter(WriterType);
+    return try DeflateHuffmanOnly(wrap, WriterType, TokenWriter).init(writer);
+}
+
+// Creates huffman only deflate blocks. Without LZ77 compression, without
+// finding matches in the history.
+fn DeflateHuffmanOnly(comptime wrap: Wrapper, comptime WriterType: type, comptime TokenWriter: type) type {
+    return struct {
+        wrt: WriterType,
+        token_writer: TokenWriter,
+        hasher: wrap.Hasher() = .{},
+
+        const Self = @This();
+
+        pub fn init(wrt: WriterType) !Self {
+            var self = Self{
+                .wrt = wrt,
+                .token_writer = TokenWriter.init(wrt),
+            };
+            try self.writeHeader();
+            return self;
+        }
+
+        pub fn flush(self: *Self) !void {
+            try self.token_writer.flush();
+        }
+
+        pub fn close(self: *Self) !void {
+            try self.token_writer.writeBlockHuff(true, "");
+            try self.writeFooter();
+        }
+
+        pub fn write(self: *Self, input: []const u8) !usize {
+            self.hasher.update(input);
+            try self.token_writer.writeBlockHuff(false, input);
+            return input.len;
+        }
+
+        pub fn stream(self: *Self, rdr: anytype) !void {
+            var buf: [64 * 1024]u8 = undefined;
+            while (true) {
+                const n = try rdr.readAll(&buf);
+                self.hasher.update(buf[0..n]);
+                try self.token_writer.writeBlockHuff(false, buf[0..n]);
+                if (n < buf.len) break; // no more data in reader
             }
         }
 

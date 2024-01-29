@@ -16,6 +16,10 @@ pub fn compress(reader: anytype, writer: anytype, options: Options) !void {
     try deflate.compress(.raw, reader, writer, options);
 }
 
+pub fn compressHuffmanOnly(reader: anytype, writer: anytype) !void {
+    try deflate.compressHuffmanOnly(.raw, reader, writer);
+}
+
 pub fn compressor(writer: anytype, options: Options) !void {
     try deflate.compressor(.raw, writer, options);
 }
@@ -31,6 +35,10 @@ pub const gzip = struct {
 
     pub fn compress(reader: anytype, writer: anytype, options: Options) !void {
         try deflate.compress(.gzip, reader, writer, options);
+    }
+
+    pub fn compressHuffmanOnly(reader: anytype, writer: anytype) !void {
+        try deflate.compressHuffmanOnly(.gzip, reader, writer);
     }
 
     pub fn compressor(writer: anytype, options: Options) !deflate.Compressor(.gzip, @TypeOf(writer)) {
@@ -49,6 +57,10 @@ pub const zlib = struct {
 
     pub fn compress(reader: anytype, writer: anytype, options: Options) !void {
         try deflate.compress(.zlib, reader, writer, options);
+    }
+
+    pub fn compressHuffmanOnly(reader: anytype, writer: anytype) !void {
+        try deflate.compressHuffmanOnly(.zlib, reader, writer);
     }
 
     pub fn compressor(writer: anytype, options: Options) !deflate.Compressor(.zlib, @TypeOf(writer)) {
@@ -146,16 +158,19 @@ test "compress/decompress" {
     const Wrapper = @import("wrapper.zig").Wrapper;
     const fixedBufferStream = std.io.fixedBufferStream;
 
-    var cmp_buf: [64 * 1024]u8 = undefined; // compressed buffer
-    var dcm_buf: [128 * 1024]u8 = undefined; // decompressed buffer
+    var cmp_buf: [32 * 1024]u8 = undefined; // compressed data buffer
+    var dcm_buf: [64 * 1024]u8 = undefined; // decompressed data buffer
 
+    const levels = [_]Level{ .level_4, .level_5, .level_6, .level_7, .level_8, .level_9 };
     const cases = [_]struct {
         data: []const u8, // uncompressed content
-        gzip_sizes: [6]usize, // compressed data sizes per level 4-9
+        gzip_sizes: [levels.len]usize, // compressed data sizes per level 4-9
+        huffman_only_size: usize,
     }{
         .{
             .data = @embedFile("testdata/rfc1951.txt"),
             .gzip_sizes = [_]usize{ 11513, 11217, 11139, 11126, 11122, 11119 },
+            .huffman_only_size = 20291,
         },
     };
 
@@ -175,9 +190,8 @@ test "compress/decompress" {
     for (cases) |case| { // for each case
         const data = case.data;
 
-        for (4..10) |ilevel| { // for each compression level
-            const level: Level = @enumFromInt(ilevel);
-            const gzip_size = case.gzip_sizes[ilevel - 4];
+        for (levels, 0..) |level, i| { // for each compression level
+            const gzip_size = case.gzip_sizes[i];
 
             inline for (Wrapper.list) |wrap| { // for each wrapping
                 const compressed_size = gzip_size - Wrapper.gzip.size() + wrap.size();
@@ -206,6 +220,56 @@ test "compress/decompress" {
                     var compressed = fixedBufferStream(&cmp_buf);
 
                     var cmp = try deflate.compressor(wrap, compressed.writer(), .{ .level = level });
+                    var cmp_wrt = cmp.writer();
+                    try cmp_wrt.writeAll(data);
+                    try cmp.close();
+
+                    try testing.expectEqual(compressed_size, compressed.pos);
+                }
+                // decompressor reader interface
+                {
+                    var compressed = fixedBufferStream(cmp_buf[0..compressed_size]);
+
+                    var dcm = inflate.decompressor(wrap, compressed.reader());
+                    var dcm_rdr = dcm.reader();
+                    const n = try dcm_rdr.readAll(&dcm_buf);
+
+                    try testing.expectEqual(data.len, n);
+                    try testing.expectEqualSlices(u8, data, dcm_buf[0..n]);
+                }
+            }
+        }
+        // huffman only compression
+        {
+            const gzip_size = case.huffman_only_size;
+
+            inline for (Wrapper.list) |wrap| { // for each wrapping
+                const compressed_size = gzip_size - Wrapper.gzip.size() + wrap.size();
+
+                // compress original stream to compressed stream
+                {
+                    var original = fixedBufferStream(data);
+                    var compressed = fixedBufferStream(&cmp_buf);
+
+                    try deflate.compressHuffmanOnly(wrap, original.reader(), compressed.writer());
+
+                    try testing.expectEqual(compressed_size, compressed.pos);
+                }
+                // decompress compressed stream to decompressed stream
+                {
+                    var compressed = fixedBufferStream(cmp_buf[0..compressed_size]);
+                    var decompressed = fixedBufferStream(&dcm_buf);
+
+                    try inflate.decompress(wrap, compressed.reader(), decompressed.writer());
+
+                    try testing.expectEqualSlices(u8, data, decompressed.getWritten());
+                }
+
+                // compressor writer interface
+                {
+                    var compressed = fixedBufferStream(&cmp_buf);
+
+                    var cmp = try deflate.huffmanOnlyCompressor(wrap, compressed.writer());
                     var cmp_wrt = cmp.writer();
                     try cmp_wrt.writeAll(data);
                     try cmp.close();
