@@ -41,24 +41,20 @@ const LevelArgs = struct {
     }
 };
 
-pub const Options = struct {
-    level: Level = .default,
-};
-
-pub fn compress(comptime wrap: Wrapper, reader: anytype, writer: anytype, options: Options) !void {
-    var df = try compressor(wrap, writer, options);
+pub fn compress(comptime wrap: Wrapper, reader: anytype, writer: anytype, level: Level) !void {
+    var df = try compressor(wrap, writer, level);
     try df.stream(reader);
     try df.close();
 }
 
-pub fn compressor(comptime wrap: Wrapper, writer: anytype, options: Options) !Deflate(
+pub fn compressor(comptime wrap: Wrapper, writer: anytype, level: Level) !Deflate(
     wrap,
     @TypeOf(writer),
     hbw.HuffmanBitWriter(@TypeOf(writer)),
 ) {
     const WriterType = @TypeOf(writer);
     const TokenWriter = hbw.HuffmanBitWriter(WriterType);
-    return try Deflate(wrap, WriterType, TokenWriter).init(writer, options);
+    return try Deflate(wrap, WriterType, TokenWriter).init(writer, level);
 }
 
 // Default compression algorithm. First finds tokens from the non compressed
@@ -86,11 +82,11 @@ fn Deflate(comptime wrap: Wrapper, comptime WriterType: type, comptime TokenWrit
         prev_literal: ?u8 = null,
 
         const Self = @This();
-        pub fn init(wrt: WriterType, options: Options) !Self {
+        pub fn init(wrt: WriterType, level: Level) !Self {
             var self = Self{
                 .wrt = wrt,
                 .token_writer = TokenWriter.init(wrt),
-                .level = LevelArgs.get(options.level),
+                .level = LevelArgs.get(level),
             };
             try self.writeHeader();
             return self;
@@ -399,7 +395,7 @@ test "deflate: tokenization" {
         inline for (Wrapper.list) |wrap| { // for each wrapping
             var cw = io.countingWriter(io.null_writer);
             const cww = cw.writer();
-            var df = try Deflate(wrap, @TypeOf(cww), TestTokenWriter).init(cww, .{});
+            var df = try Deflate(wrap, @TypeOf(cww), TestTokenWriter).init(cww, .default);
 
             _ = try df.write(c.data);
             try df.flush();

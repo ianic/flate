@@ -48,14 +48,14 @@ pub fn run(output: anytype, opt: Options) !void {
             return;
         }
         //var fbs = std.io.fixedBufferStream(input);
-        const f_opt: flate.Options = .{ .level = @enumFromInt(opt.level) };
+        const level: flate.Level = @enumFromInt(opt.level);
         switch (opt.alg) {
-            .deflate => try flate.compress(input, output, f_opt),
-            .zlib => try zlib.compress(input, output, f_opt),
-            .gzip => try gzip.compress(input, output, f_opt),
+            .deflate => try flate.compress(input, output, level),
+            .zlib => try zlib.compress(input, output, level),
+            .gzip => try gzip.compress(input, output, level),
             // .gzip => {
             //     var buf: [4096]u8 = undefined;
-            //     var cmp = try gzip.compressor(output, f_opt);
+            //     var cmp = try gzip.compressor(output, level);
             //     while (true) {
             //         const n = try input.readAll(&buf);
             //         _ = try cmp.write(buf[0..n]);

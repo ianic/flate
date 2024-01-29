@@ -2,7 +2,6 @@ const deflate = @import("deflate.zig");
 const inflate = @import("inflate.zig");
 
 pub const Level = deflate.Level;
-pub const Options = deflate.Options;
 
 pub fn decompress(reader: anytype, writer: anytype) !void {
     try inflate.decompress(.raw, reader, writer);
@@ -12,16 +11,16 @@ pub fn decompressor(reader: anytype) inflate.Inflate(.raw, @TypeOf(reader)) {
     return inflate.decompressor(.raw, reader);
 }
 
-pub fn compress(reader: anytype, writer: anytype, options: Options) !void {
-    try deflate.compress(.raw, reader, writer, options);
+pub fn compress(reader: anytype, writer: anytype, level: Level) !void {
+    try deflate.compress(.raw, reader, writer, level);
 }
 
 pub fn compressHuffmanOnly(reader: anytype, writer: anytype) !void {
     try deflate.compressHuffmanOnly(.raw, reader, writer);
 }
 
-pub fn compressor(writer: anytype, options: Options) !void {
-    try deflate.compressor(.raw, writer, options);
+pub fn compressor(writer: anytype, level: Level) !void {
+    try deflate.compressor(.raw, writer, level);
 }
 
 pub const gzip = struct {
@@ -33,16 +32,16 @@ pub const gzip = struct {
         return inflate.decompressor(.gzip, reader);
     }
 
-    pub fn compress(reader: anytype, writer: anytype, options: Options) !void {
-        try deflate.compress(.gzip, reader, writer, options);
+    pub fn compress(reader: anytype, writer: anytype, level: Level) !void {
+        try deflate.compress(.gzip, reader, writer, level);
     }
 
     pub fn compressHuffmanOnly(reader: anytype, writer: anytype) !void {
         try deflate.compressHuffmanOnly(.gzip, reader, writer);
     }
 
-    pub fn compressor(writer: anytype, options: Options) !deflate.Compressor(.gzip, @TypeOf(writer)) {
-        return try deflate.compressor(.gzip, writer, options);
+    pub fn compressor(writer: anytype, level: Level) !deflate.Compressor(.gzip, @TypeOf(writer)) {
+        return try deflate.compressor(.gzip, writer, level);
     }
 };
 
@@ -55,16 +54,16 @@ pub const zlib = struct {
         return inflate.decompressor(.zlib, reader);
     }
 
-    pub fn compress(reader: anytype, writer: anytype, options: Options) !void {
-        try deflate.compress(.zlib, reader, writer, options);
+    pub fn compress(reader: anytype, writer: anytype, level: Level) !void {
+        try deflate.compress(.zlib, reader, writer, level);
     }
 
     pub fn compressHuffmanOnly(reader: anytype, writer: anytype) !void {
         try deflate.compressHuffmanOnly(.zlib, reader, writer);
     }
 
-    pub fn compressor(writer: anytype, options: Options) !deflate.Compressor(.zlib, @TypeOf(writer)) {
-        return try deflate.compressor(.zlib, writer, options);
+    pub fn compressor(writer: anytype, level: Level) !deflate.Compressor(.zlib, @TypeOf(writer)) {
+        return try deflate.compressor(.zlib, writer, level);
     }
 };
 
@@ -201,7 +200,7 @@ test "compress/decompress" {
                     var original = fixedBufferStream(data);
                     var compressed = fixedBufferStream(&cmp_buf);
 
-                    try deflate.compress(wrap, original.reader(), compressed.writer(), .{ .level = level });
+                    try deflate.compress(wrap, original.reader(), compressed.writer(), level);
 
                     try testing.expectEqual(compressed_size, compressed.pos);
                 }
@@ -219,7 +218,7 @@ test "compress/decompress" {
                 {
                     var compressed = fixedBufferStream(&cmp_buf);
 
-                    var cmp = try deflate.compressor(wrap, compressed.writer(), .{ .level = level });
+                    var cmp = try deflate.compressor(wrap, compressed.writer(), level);
                     var cmp_wrt = cmp.writer();
                     try cmp_wrt.writeAll(data);
                     try cmp.close();
