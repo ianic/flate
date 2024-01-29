@@ -173,13 +173,3 @@ test "Huffman init/find" {
     for (0b1111_000..0b1_0000_000) |c| // 120...128 (8)
         try testing.expectEqual(@as(u16, 16), h.find(@intCast(c)).symbol);
 }
-
-test "inspect sizes" {
-    if (true) return error.SkipZigTest;
-    std.debug.print("\n{d}\n", .{@bitSizeOf(Symbol)});
-    std.debug.print("{d}\n", .{@sizeOf(Symbol)});
-    std.debug.print("{d}\n", .{@sizeOf([1 << 15]Symbol) / 1024});
-    std.debug.print("{d}\n", .{@sizeOf([1 << 15]u8) / 1024});
-    std.debug.print("{d}\n", .{@sizeOf(HuffmanDecoder(286)) / 1024});
-    std.debug.print("{d}\n", .{@sizeOf(HuffmanDecoder(286))});
-}

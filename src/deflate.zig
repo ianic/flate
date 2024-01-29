@@ -57,15 +57,23 @@ pub fn compressor(comptime wrap: Wrapper, writer: anytype, level: Level) !Deflat
     return try Deflate(wrap, WriterType, TokenWriter).init(writer, level);
 }
 
-// Default compression algorithm. First finds tokens from the non compressed
-// input data. Acumulates `const.block.tokens` number of tokens and then passes
-// them to the `token_writer`. Client has to call `close` to write block with
-// the final bit set.
+// Default compression algorithm. Has two steps: tokenization and token
+// encoding.
 //
-// Level defines how hard (how slow) it tries to find match.
+// Tokenization takes uncompressed input stream and produces list of tokens.
+// Each token can be literal (byte of data) or match (backrefernce to previous
+// data with distance and length). Tokenization acumulates `const.block.tokens`
+// number of tokens, when full or `flush` is called tokens are passed to the
+// `token_writer`. Level defines how hard (how slow) it tries to find match.
 //
-// Wrapper puts header and footer for gzip or zlib, they both share same
-// deflate body. Raw has no header or footer just deflate body.
+// Token writer will decide which type of deflate block to write (stored, fixed,
+// dynamic) and encode tokens to the output byte stream.   Client has to call
+// `close` to write block with the final bit set.
+//
+// Wrapper defines type of header and footer which can be gzip, zlib or raw.
+// They all share same deflate body. Raw has no header or footer just deflate
+// body.
+//
 fn Deflate(comptime wrap: Wrapper, comptime WriterType: type, comptime TokenWriter: type) type {
     return struct {
         lookup: Lookup = .{},
@@ -648,19 +656,66 @@ const Tokens = struct {
     }
 };
 
-test "deflate compress file to stdout" {
-    if (true) return error.SkipZigTest;
+test "deflate file tokenization" {
+    const levels = [_]Level{ .level_4, .level_5, .level_6, .level_7, .level_8, .level_9 };
+    const cases = [_]struct {
+        data: []const u8, // uncompressed content
+        // expected number of tokens producet in deflate tokenization
+        tokens_count: [levels.len]usize = .{0} ** levels.len,
+    }{
+        .{
+            .data = @embedFile("testdata/rfc1951.txt"),
+            .tokens_count = .{ 7675, 7672, 7599, 7594, 7598, 7599 },
+        },
 
-    const file_name = "benchdata/2600.txt.utf-8";
-    var file = try std.fs.cwd().openFile(file_name, .{});
-    defer file.close();
+        .{
+            .data = @embedFile("testdata/huffman-null-max.input"),
+            .tokens_count = .{ 257, 257, 257, 257, 257, 257 },
+        },
+        .{
+            .data = @embedFile("testdata/huffman-pi.input"),
+            .tokens_count = .{ 2570, 2564, 2564, 2564, 2564, 2564 },
+        },
+        .{
+            .data = @embedFile("testdata/huffman-text.input"),
+            .tokens_count = .{ 235, 234, 234, 234, 234, 234 },
+        },
+    };
 
-    const wrt = io.getStdOut().writer();
+    for (cases) |case| { // for each case
+        const data = case.data;
 
-    const tw: TokenDecoder(@TypeOf(wrt)) = .{ .wrt = wrt };
-    var df = Deflate(@TypeOf(tw)).init(tw);
-    try df.compress(file.reader());
-    try df.close();
+        for (levels, 0..) |level, i| { // for each compression level
+            var original = io.fixedBufferStream(data);
+
+            // buffer for decompressed data
+            var al = std.ArrayList(u8).init(testing.allocator);
+            defer al.deinit();
+            const writer = al.writer();
+
+            // create compressor
+            const WriterType = @TypeOf(writer);
+            const TokenWriter = TokenDecoder(@TypeOf(writer));
+            var cmp = try Deflate(.raw, WriterType, TokenWriter).init(writer, level);
+
+            // Stream uncompressed `orignal` data to the compressor. It will
+            // produce tokens list and pass that list to the TokenDecoder. This
+            // TokenDecoder uses SlidingWindow from inflate to convert list of
+            // tokens back to the uncompressed stream.
+            try cmp.stream(original.reader());
+            try cmp.flush();
+            const expected_count = case.tokens_count[i];
+            const actual = cmp.token_writer.tokens_count;
+            if (expected_count == 0) {
+                print("actual token count {d}\n", .{actual});
+            } else {
+                try testing.expectEqual(expected_count, actual);
+            }
+
+            try testing.expectEqual(data.len, al.items.len);
+            try testing.expectEqualSlices(u8, data, al.items);
+        }
+    }
 }
 
 fn TokenDecoder(comptime WriterType: type) type {
@@ -668,9 +723,16 @@ fn TokenDecoder(comptime WriterType: type) type {
         const SlidingWindow = @import("sliding_window.zig").SlidingWindow;
         win: SlidingWindow = .{},
         wrt: WriterType,
+        tokens_count: usize = 0,
+
         const Self = @This();
 
+        pub fn init(wrt: WriterType) Self {
+            return .{ .wrt = wrt };
+        }
+
         pub fn writeBlock(self: *Self, tokens: []const Token, _: bool, _: ?[]const u8) !void {
+            self.tokens_count += tokens.len;
             for (tokens) |t| {
                 switch (t.kind) {
                     .literal => self.win.write(t.literal()),
