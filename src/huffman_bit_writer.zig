@@ -6,6 +6,10 @@ const consts = @import("consts.zig");
 const Token = @import("Token.zig");
 const BitWriter = @import("bit_writer.zig").BitWriter;
 
+pub fn huffmanBitWriter(writer: anytype) HuffmanBitWriter(@TypeOf(writer)) {
+    return HuffmanBitWriter(@TypeOf(writer)).init(writer);
+}
+
 pub fn HuffmanBitWriter(comptime WriterType: type) type {
     const BitWriterType = BitWriter(WriterType);
     return struct {
@@ -16,37 +20,23 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
         pub const Error = BitWriterType.Error;
         bit_writer: BitWriterType,
 
-        codegen_freq: [consts.huffman.codegen_code_count]u16,
-        literal_freq: [consts.huffman.max_num_lit]u16,
-        offset_freq: [consts.huffman.offset_code_count]u16,
-        codegen: [consts.huffman.max_num_lit + consts.huffman.offset_code_count + 1]u8,
-        literal_encoding: hc.LiteralEncoder,
-        offset_encoding: hc.OffsetEncoder,
-        codegen_encoding: hc.CodegenEncoder,
+        codegen_freq: [consts.huffman.codegen_code_count]u16 = undefined,
+        literal_freq: [consts.huffman.max_num_lit]u16 = undefined,
+        offset_freq: [consts.huffman.offset_code_count]u16 = undefined,
+        codegen: [consts.huffman.max_num_lit + consts.huffman.offset_code_count + 1]u8 = undefined,
+        literal_encoding: hc.LiteralEncoder = .{},
+        offset_encoding: hc.OffsetEncoder = .{},
+        codegen_encoding: hc.CodegenEncoder = .{},
         fixed_literal_encoding: hc.LiteralEncoder,
         fixed_offset_encoding: hc.OffsetEncoder,
         huff_offset: hc.OffsetEncoder,
 
         pub fn init(writer: WriterType) Self {
-            var offset_freq = [1]u16{0} ** consts.huffman.offset_code_count;
-            offset_freq[0] = 1;
-            // huff_offset is a static offset encoder used for huffman only encoding.
-            // It can be reused since we will not be encoding offset values.
-            var huff_offset: hc.OffsetEncoder = .{};
-            huff_offset.generate(offset_freq[0..], 15);
-
             return .{
                 .bit_writer = BitWriterType.init(writer),
-                .codegen_freq = undefined,
-                .literal_freq = undefined,
-                .offset_freq = undefined,
-                .codegen = undefined,
-                .literal_encoding = .{},
-                .codegen_encoding = .{},
-                .offset_encoding = .{},
                 .fixed_literal_encoding = hc.fixedLiteralEncoder(),
                 .fixed_offset_encoding = hc.fixedOffsetEncoder(),
-                .huff_offset = huff_offset,
+                .huff_offset = hc.huffmanOffsetEncoder(),
             };
         }
 
@@ -523,12 +513,9 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
             try self.writeCode(le_codes[consts.end_block_marker]);
         }
 
-        // TODO: unused remove this, and huff_offset field
-        // TODO: move initializtion to definiton after that
-        //
         // Encodes a block of bytes as either Huffman encoded literals or uncompressed bytes
         // if the results only gains very little from compression.
-        fn writeBlockHuff(self: *Self, eof: bool, input: []const u8) Error!void {
+        pub fn writeBlockHuff(self: *Self, eof: bool, input: []const u8) Error!void {
             // Clear histogram
             for (self.literal_freq, 0..) |_, i| {
                 self.literal_freq[i] = 0;
@@ -593,10 +580,6 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
             }
         }
     };
-}
-
-pub fn huffmanBitWriter(writer: anytype) HuffmanBitWriter(@TypeOf(writer)) {
-    return HuffmanBitWriter(@TypeOf(writer)).init(writer);
 }
 
 // tests

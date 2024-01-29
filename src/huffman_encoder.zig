@@ -338,6 +338,16 @@ pub fn fixedOffsetEncoder() OffsetEncoder {
     return h;
 }
 
+pub fn huffmanOffsetEncoder() OffsetEncoder {
+    var offset_freq = [1]u16{0} ** consts.huffman.offset_code_count;
+    offset_freq[0] = 1;
+    // huff_offset is a static offset encoder used for huffman only encoding.
+    // It can be reused since we will not be encoding offset values.
+    var h: OffsetEncoder = .{};
+    h.generate(offset_freq[0..], 15);
+    return h;
+}
+
 fn byLiteral(context: void, a: LiteralNode, b: LiteralNode) bool {
     _ = context;
     return a.literal < b.literal;
