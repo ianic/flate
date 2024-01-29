@@ -270,6 +270,11 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
             codegen[out_index] = bad_code;
         }
 
+        const DynamicSize = struct {
+            size: u32,
+            num_codegens: u32,
+        };
+
         // dynamicSize returns the size of dynamically encoded data in bits.
         fn dynamicSize(
             self: *Self,
@@ -304,6 +309,11 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
                 self.fixed_offset_encoding.bitLength(&self.offset_freq) +
                 extra_bits;
         }
+
+        const StoredSize = struct {
+            size: u32,
+            storable: bool,
+        };
 
         // storedSizeFits calculates the stored size, including header.
         // The function returns the size in bits and whether the block
@@ -672,18 +682,15 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
             }
             try self.writeCode(encoding[consts.end_block_marker]);
         }
+
+        fn histogram(b: []const u8, h: *[286]u16) void {
+            var lh = h.*[0..256];
+            for (b) |t| {
+                lh[t] += 1;
+            }
+        }
     };
 }
-
-const DynamicSize = struct {
-    size: u32,
-    num_codegens: u32,
-};
-
-const StoredSize = struct {
-    size: u32,
-    storable: bool,
-};
 
 pub fn huffmanBitWriter(writer: anytype) HuffmanBitWriter(@TypeOf(writer)) {
     return HuffmanBitWriter(@TypeOf(writer)).init(writer);
@@ -692,12 +699,6 @@ pub fn huffmanBitWriter(writer: anytype) HuffmanBitWriter(@TypeOf(writer)) {
 // histogram accumulates a histogram of b in h.
 //
 // h.len must be >= 256, and h's elements must be all zeroes.
-fn histogram(b: []const u8, h: *[286]u16) void {
-    var lh = h.*[0..256];
-    for (b) |t| {
-        lh[t] += 1;
-    }
-}
 
 // tests
 const expect = std.testing.expect;
@@ -708,91 +709,22 @@ const testing = std.testing;
 
 const ArrayList = std.ArrayList;
 
-test "writeBlockHuff" {
-    // Tests huffman encoding against reference files to detect possible regressions.
-    // If encoding/bit allocation changes you can regenerate these files
-
-    try testBlockHuff(
-        "huffman-null-max.input",
-        "huffman-null-max.golden",
-    );
-    try testBlockHuff(
-        "huffman-pi.input",
-        "huffman-pi.golden",
-    );
-    try testBlockHuff(
-        "huffman-rand-1k.input",
-        "huffman-rand-1k.golden",
-    );
-    try testBlockHuff(
-        "huffman-rand-limit.input",
-        "huffman-rand-limit.golden",
-    );
-    try testBlockHuff(
-        "huffman-rand-max.input",
-        "huffman-rand-max.golden",
-    );
-    try testBlockHuff(
-        "huffman-shifts.input",
-        "huffman-shifts.golden",
-    );
-    try testBlockHuff(
-        "huffman-text.input",
-        "huffman-text.golden",
-    );
-    try testBlockHuff(
-        "huffman-text-shift.input",
-        "huffman-text-shift.golden",
-    );
-    try testBlockHuff(
-        "huffman-zero.input",
-        "huffman-zero.golden",
-    );
-}
-
-fn testBlockHuff(comptime in_name: []const u8, comptime want_name: []const u8) !void {
-    const in: []const u8 = @embedFile("testdata/" ++ in_name);
-    const want: []const u8 = @embedFile("testdata/" ++ want_name);
-
-    var buf = ArrayList(u8).init(testing.allocator);
-    defer buf.deinit();
-    var bw = huffmanBitWriter(buf.writer());
-    try bw.writeBlockHuff(false, in);
-    try bw.flush();
-
-    try std.testing.expectEqualSlices(u8, want, buf.items);
-
-    // Test if the writer produces the same output after reset.
-    var buf_after_reset = ArrayList(u8).init(testing.allocator);
-    defer buf_after_reset.deinit();
-
-    bw.reset(buf_after_reset.writer());
-
-    try bw.writeBlockHuff(false, in);
-    try bw.flush();
-
-    try std.testing.expectEqualSlices(u8, buf.items, buf_after_reset.items);
-    try std.testing.expectEqualSlices(u8, want, buf_after_reset.items);
-
-    try testWriterEOF(.write_huffman_block, &[0]Token{}, in);
-}
-
-const HuffTest = struct {
+const TestCase = struct {
     tokens: []const Token,
     input: []const u8 = "", // File name of input data matching the tokens.
     want: []const u8 = "", // File name of data with the expected output with input available.
     want_no_input: []const u8 = "", // File name of the expected output when no input is available.
 };
 
-const writeBlockTests = blk: {
+const writeBlockTestCases = blk: {
     @setEvalBranchQuota(4096 * 2);
 
     const L = Token.initLiteral;
     const M = Token.initMatch;
     const ml = M(1, 258); // Maximum length token. Used to reduce the size of writeBlockTests
 
-    break :blk &[_]HuffTest{
-        HuffTest{
+    break :blk &[_]TestCase{
+        TestCase{
             .input = "huffman-null-max.input",
             .want = "huffman-null-max.{s}.expect",
             .want_no_input = "huffman-null-max.{s}.expect-noinput",
@@ -812,7 +744,7 @@ const writeBlockTests = blk: {
                 ml,     ml, ml, ml, ml, ml, ml, ml, ml, ml, ml, ml, ml, ml, ml, L(0x0), L(0x0),
             },
         },
-        HuffTest{
+        TestCase{
             .input = "huffman-pi.input",
             .want = "huffman-pi.{s}.expect",
             .want_no_input = "huffman-pi.{s}.expect-noinput",
@@ -1142,7 +1074,7 @@ const writeBlockTests = blk: {
                 L('4'),     L('6'),     L('1'),     M(3018, 4), L('8'),     L('0'),
             },
         },
-        HuffTest{
+        TestCase{
             .input = "huffman-rand-1k.input",
             .want = "huffman-rand-1k.{s}.expect",
             .want_no_input = "huffman-rand-1k.{s}.expect-noinput",
@@ -1221,7 +1153,7 @@ const writeBlockTests = blk: {
                 L(0xfa), L(0x8),  L(0xb1), L(0xde), L(0x17), L(0x4a),
             },
         },
-        HuffTest{
+        TestCase{
             .input = "huffman-rand-limit.input",
             .want = "huffman-rand-limit.{s}.expect",
             .want_no_input = "huffman-rand-limit.{s}.expect-noinput",
@@ -1242,7 +1174,7 @@ const writeBlockTests = blk: {
                 L(0x75), L(0xda),  L(0xea), L(0x9b), L(0xa),
             },
         },
-        HuffTest{
+        TestCase{
             .input = "huffman-shifts.input",
             .want = "huffman-shifts.{s}.expect",
             .want_no_input = "huffman-shifts.{s}.expect-noinput",
@@ -1253,7 +1185,7 @@ const writeBlockTests = blk: {
                 M(2, 258), M(2, 258), M(2, 258), M(2, 258), M(2, 258), M(2, 258), M(2, 258), M(2, 256),
             },
         },
-        HuffTest{
+        TestCase{
             .input = "huffman-text-shift.input",
             .want = "huffman-text-shift.{s}.expect",
             .want_no_input = "huffman-text-shift.{s}.expect-noinput",
@@ -1290,7 +1222,7 @@ const writeBlockTests = blk: {
                 L('&'),   L('/'), L('?'),   L('"'),
             },
         },
-        HuffTest{
+        TestCase{
             .input = "huffman-text.input",
             .want = "huffman-text.{s}.expect",
             .want_no_input = "huffman-text.{s}.expect-noinput",
@@ -1327,13 +1259,13 @@ const writeBlockTests = blk: {
                 L('}'),    L(0xa),
             },
         },
-        HuffTest{
+        TestCase{
             .input = "huffman-zero.input",
             .want = "huffman-zero.{s}.expect",
             .want_no_input = "huffman-zero.{s}.expect-noinput",
             .tokens = &[_]Token{ L(0x30), ml, M(1, 49) },
         },
-        HuffTest{
+        TestCase{
             .input = "",
             .want = "",
             .want_no_input = "null-long-match.{s}.expect-noinput",
@@ -1382,132 +1314,112 @@ const writeBlockTests = blk: {
     };
 };
 
-const TestType = enum {
+// tests if the writeBlock encoding has changed.
+test "writeBlock" {
+    inline for (0..writeBlockTestCases.len) |i| {
+        try testBlock(writeBlockTestCases[i], .write_block);
+    }
+}
+
+// tests if the writeBlockDynamic encoding has changed.
+test "writeBlockDynamic" {
+    inline for (0..writeBlockTestCases.len) |i| {
+        try testBlock(writeBlockTestCases[i], .write_dyn_block);
+    }
+}
+
+test "writeBlockHuff" {
+    inline for (0..writeBlockTestCases.len) |i| {
+        try testBlock(writeBlockTestCases[i], .write_huffman_block);
+    }
+    try testBlock(.{
+        .tokens = &[_]Token{},
+        .input = "huffman-rand-max.input",
+        .want = "huffman-rand-max.{s}.expect",
+    }, .write_huffman_block);
+}
+
+const TestFn = enum {
     write_block,
     write_dyn_block, // write dynamic block
     write_huffman_block,
 
-    fn to_s(self: TestType) []const u8 {
+    fn to_s(self: TestFn) []const u8 {
         return switch (self) {
             .write_block => "wb",
             .write_dyn_block => "dyn",
             .write_huffman_block => "huff",
         };
     }
+
+    fn write(
+        comptime self: TestFn,
+        bw: anytype,
+        tok: []const Token,
+        input: ?[]const u8,
+        final: bool,
+    ) !void {
+        switch (self) {
+            .write_block => try bw.writeBlock(tok, final, input),
+            .write_dyn_block => try bw.writeBlockDynamic(tok, final, input),
+            .write_huffman_block => try bw.writeBlockHuff(final, input.?),
+        }
+        try bw.flush();
+    }
 };
 
-test "writeBlock" {
-    @setEvalBranchQuota(10000);
-    // tests if the writeBlock encoding has changed.
-
-    const ttype: TestType = .write_block;
-    try testBlock(writeBlockTests[0], ttype);
-    try testBlock(writeBlockTests[1], ttype);
-    try testBlock(writeBlockTests[2], ttype);
-    try testBlock(writeBlockTests[3], ttype);
-    try testBlock(writeBlockTests[4], ttype);
-    try testBlock(writeBlockTests[5], ttype);
-    try testBlock(writeBlockTests[6], ttype);
-    try testBlock(writeBlockTests[7], ttype);
-    try testBlock(writeBlockTests[8], ttype);
-}
-
-test "writeBlockDynamic" {
-    @setEvalBranchQuota(10000);
-    // tests if the writeBlockDynamic encoding has changed.
-
-    const ttype: TestType = .write_dyn_block;
-    try testBlock(writeBlockTests[0], ttype);
-    try testBlock(writeBlockTests[1], ttype);
-    try testBlock(writeBlockTests[2], ttype);
-    try testBlock(writeBlockTests[3], ttype);
-    try testBlock(writeBlockTests[4], ttype);
-    try testBlock(writeBlockTests[5], ttype);
-    try testBlock(writeBlockTests[6], ttype);
-    try testBlock(writeBlockTests[7], ttype);
-    try testBlock(writeBlockTests[8], ttype);
-}
-
-// testBlock tests a block against its references,
-// or regenerate the references, if "-update" flag is set.
-fn testBlock(comptime ht: HuffTest, comptime ttype: TestType) !void {
-    if (ht.input.len != 0 and ht.want.len != 0) {
-        const want_name = comptime fmt.comptimePrint(ht.want, .{ttype.to_s()});
-        const input = @embedFile("testdata/" ++ ht.input);
+// testBlock tests a block against its references
+//
+// size
+//  64K [file-name].input                  - input non compressed file
+// 8.1K [file-name].golden                 -
+//   78 [file-name].dyn.expect             - output with writeBlockDynamic
+//   78 [file-name].wb.expect              - output with writeBlock
+// 8.1K [file-name].huff.expect            - output with writeBlockHuff
+//   78 [file-name].dyn.expect-noinput     - output with writeBlockDynamic when input is null
+//   78 [file-name].wb.expect-noinput      - output with writeBlock when input is null
+//
+//   wb   - writeBlock
+//   dyn  - writeBlockDynamic
+//   huff - writeBlockHuff
+//
+fn testBlock(comptime tc: TestCase, comptime tfn: TestFn) !void {
+    if (tc.input.len != 0 and tc.want.len != 0) {
+        const want_name = comptime fmt.comptimePrint(tc.want, .{tfn.to_s()});
+        const input = @embedFile("testdata/" ++ tc.input);
         const want = @embedFile("testdata/" ++ want_name);
-
-        var buf = ArrayList(u8).init(testing.allocator);
-        var bw = huffmanBitWriter(buf.writer());
-        try writeToType(ttype, &bw, ht.tokens, input);
-
-        var got = buf.items;
-        try testing.expectEqualSlices(u8, want, got); // expect writeBlock to yield expected result
-
-        // Test if the writer produces the same output after reset.
-        buf.deinit();
-        buf = ArrayList(u8).init(testing.allocator);
-        defer buf.deinit();
-
-        bw.reset(buf.writer());
-
-        try writeToType(ttype, &bw, ht.tokens, input);
-        try bw.flush();
-        got = buf.items;
-        try testing.expectEqualSlices(u8, want, got); // expect writeBlock to yield expected result
-        try testWriterEOF(.write_block, ht.tokens, input);
+        try testWriteBlock(tfn, input, want, tc.tokens);
     }
 
-    const want_name_no_input = comptime fmt.comptimePrint(ht.want_no_input, .{ttype.to_s()});
-    const want_ni = @embedFile("testdata/" ++ want_name_no_input);
+    if (tfn == .write_huffman_block) {
+        return;
+    }
 
+    const want_name_no_input = comptime fmt.comptimePrint(tc.want_no_input, .{tfn.to_s()});
+    const want = @embedFile("testdata/" ++ want_name_no_input);
+    try testWriteBlock(tfn, null, want, tc.tokens);
+}
+
+// Uses writer function `tfn` to write `tokens`, tests that we got `want` as output.
+fn testWriteBlock(comptime tfn: TestFn, input: ?[]const u8, want: []const u8, tokens: []const Token) !void {
     var buf = ArrayList(u8).init(testing.allocator);
     var bw = huffmanBitWriter(buf.writer());
-
-    try writeToType(ttype, &bw, ht.tokens, null);
-
+    try tfn.write(&bw, tokens, input, false);
     var got = buf.items;
-    try testing.expectEqualSlices(u8, want_ni, got); // expect writeBlock to yield expected result
-    try expect(got[0] & 1 != 1); // expect no EOF
-
+    try testing.expectEqualSlices(u8, want, got); // expect writeBlock to yield expected result
+    try expect(got[0] & 0b0000_0001 == 0); // bfinal is not set
+    //
     // Test if the writer produces the same output after reset.
     buf.deinit();
     buf = ArrayList(u8).init(testing.allocator);
     defer buf.deinit();
-
     bw.reset(buf.writer());
 
-    try writeToType(ttype, &bw, ht.tokens, null);
+    try tfn.write(&bw, tokens, input, true);
     try bw.flush();
     got = buf.items;
 
-    try testing.expectEqualSlices(u8, want_ni, got); // expect writeBlock to yield expected result
-    try testWriterEOF(.write_block, ht.tokens, &[0]u8{});
-}
-
-fn writeToType(ttype: TestType, bw: anytype, tok: []const Token, input: ?[]const u8) !void {
-    switch (ttype) {
-        .write_block => try bw.writeBlock(tok, false, input),
-        .write_dyn_block => try bw.writeBlockDynamic(tok, false, input),
-        else => unreachable,
-    }
-    try bw.flush();
-}
-
-// Tests if the written block contains an EOF marker.
-fn testWriterEOF(ttype: TestType, ht_tokens: []const Token, input: []const u8) !void {
-    var buf = ArrayList(u8).init(testing.allocator);
-    defer buf.deinit();
-    var bw = huffmanBitWriter(buf.writer());
-
-    switch (ttype) {
-        .write_block => try bw.writeBlock(ht_tokens, true, input),
-        .write_dyn_block => try bw.writeBlockDynamic(ht_tokens, true, input),
-        .write_huffman_block => try bw.writeBlockHuff(true, input),
-    }
-
-    try bw.flush();
-
-    const b = buf.items;
-    try expect(b.len > 0);
-    try expect(b[0] & 1 == 1);
+    try expect(got[0] & 1 == 1); // bfinal is set
+    buf.items[0] &= 0b1111_1110; // remove bfinal bit, so we can run test slices
+    try testing.expectEqualSlices(u8, want, got); // expect writeBlock to yield expected result
 }
