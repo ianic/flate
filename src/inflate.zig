@@ -221,7 +221,7 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
                         0 => try self.nonCompressedBlock(),
                         1 => try self.fixedBlock(),
                         2 => try self.dynamicBlock(),
-                        else => unreachable,
+                        else => return error.DeflateInvalidBlock,
                     };
                     if (done) {
                         self.state = if (self.bfinal == 1) .protocol_footer else .header;
@@ -256,6 +256,7 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
         pub const Error = ReaderType.Error || error{
             EndOfStream,
             Deflate,
+            DeflateInvalidBlock,
             DeflateWrongNlen,
             GzipFooterChecksum,
             GzipFooterSize,
