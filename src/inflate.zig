@@ -26,6 +26,8 @@ pub fn decompressor(comptime wrap: Wrapper, reader: anytype) Inflate(wrap, @Type
 ///
 pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
     const BitReaderType = BitReader(ReaderType);
+    const F = BitReaderType.flag;
+
     return struct {
         rdr: BitReaderType,
         win: SlidingWindow = .{},
@@ -34,7 +36,7 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
         // dynamic block huffman codes
         lit_h: hfd.LiteralDecoder = .{}, // literals
         dst_h: hfd.OffsetDecoder = .{}, // distances
-        cl_h: hfd.CodegenDecoder = .{}, // code length
+        cl_h: hfd.CodegenDecoder = .{}, // code lengths
 
         // current read state
         bfinal: u1 = 0,
@@ -43,7 +45,7 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
 
         const ReadState = enum {
             protocol_header,
-            header,
+            block_header,
             block,
             protocol_footer,
             end,
@@ -73,8 +75,13 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
                 mo.base + try self.rdr.readBits(mo.extra_bits, F.buffered);
         }
 
-        fn nonCompressedBlock(self: *Self) !bool {
-            self.rdr.alignToByte(); // skip 5 bits
+        fn blockHeader(self: *Self) !void {
+            self.bfinal = try self.rdr.read(u1, 0);
+            self.block_type = try self.rdr.read(u2, 0);
+        }
+
+        fn storedBlock(self: *Self) !bool {
+            self.rdr.alignToByte(); // skip 5 bits (block header is 3 bits)
             var len = try self.rdr.read(u16, 0);
             const nlen = try self.rdr.read(u16, 0);
             if (len != ~nlen) return error.DeflateWrongNlen;
@@ -115,7 +122,7 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
             self.win.writeCopy(length, distance);
         }
 
-        fn initDynamicBlock(self: *Self) !void {
+        fn dynamicBlockHeader(self: *Self) !void {
             const hlit: u16 = @as(u16, try self.rdr.read(u5, 0)) + 257; // number of ll code entries present - 257
             const hdist: u16 = @as(u16, try self.rdr.read(u5, 0)) + 1; // number of distance code entries - 1
             const hclen: u8 = @as(u8, try self.rdr.read(u4, 0)) + 4; // hclen + 4 code lenths are encoded
@@ -149,8 +156,6 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
             self.lit_h.build(&lit_l);
             self.dst_h.build(&dst_l);
         }
-
-        const F = BitReaderType.flag;
 
         fn dynamicBlock(self: *Self) !bool {
             while (!self.windowFull()) {
@@ -210,23 +215,22 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
             switch (self.state) {
                 .protocol_header => {
                     try self.parseHeader();
-                    self.state = .header;
+                    self.state = .block_header;
                 },
-                .header => {
-                    self.bfinal = try self.rdr.read(u1, 0);
-                    self.block_type = try self.rdr.read(u2, 0);
+                .block_header => {
+                    try self.blockHeader();
                     self.state = .block;
-                    if (self.block_type == 2) try self.initDynamicBlock();
+                    if (self.block_type == 2) try self.dynamicBlockHeader();
                 },
                 .block => {
                     const done = switch (self.block_type) {
-                        0 => try self.nonCompressedBlock(),
+                        0 => try self.storedBlock(),
                         1 => try self.fixedBlock(),
                         2 => try self.dynamicBlock(),
                         else => return error.DeflateInvalidBlock,
                     };
                     if (done) {
-                        self.state = if (self.bfinal == 1) .protocol_footer else .header;
+                        self.state = if (self.bfinal == 1) .protocol_footer else .block_header;
                     }
                 },
                 .protocol_footer => {
@@ -236,6 +240,14 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
                 },
                 .end => {},
             }
+        }
+
+        fn parseHeader(self: *Self) !void {
+            try wrap.parseHeader(&self.rdr);
+        }
+
+        fn parseFooter(self: *Self) !void {
+            try wrap.parseFooter(&self.hasher, &self.rdr);
         }
 
         /// Returns decompressed data from internal sliding window buffer.
@@ -253,7 +265,7 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
             }
         }
 
-        // reader interface implementation
+        // Reader interface implementation
 
         pub const Error = ReaderType.Error || error{
             EndOfStream,
@@ -286,14 +298,6 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
 
         pub fn reader(self: *Self) Reader {
             return .{ .context = self };
-        }
-
-        fn parseHeader(self: *Self) !void {
-            try wrap.parseHeader(&self.rdr);
-        }
-
-        fn parseFooter(self: *Self) !void {
-            try wrap.parseFooter(&self.hasher, &self.rdr);
         }
     };
 }
