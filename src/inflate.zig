@@ -61,7 +61,7 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
             return if (ml.extra_bits == 0)
                 ml.base
             else
-                ml.base + self.rdr.readBufferedBits(ml.extra_bits);
+                ml.base + try self.rdr.readBits(ml.extra_bits, F.buffered);
         }
 
         inline fn decodeDistance(self: *Self, code: u8) !u16 {
@@ -70,13 +70,13 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
             return if (mo.extra_bits == 0)
                 mo.base
             else
-                mo.base + self.rdr.readBufferedBits(mo.extra_bits);
+                mo.base + try self.rdr.readBits(mo.extra_bits, F.buffered);
         }
 
         fn nonCompressedBlock(self: *Self) !bool {
             self.rdr.alignToByte(); // skip 5 bits
-            var len = try self.rdr.read(u16);
-            const nlen = try self.rdr.read(u16);
+            var len = try self.rdr.read(u16, 0);
+            const nlen = try self.rdr.read(u16, 0);
             if (len != ~nlen) return error.DeflateWrongNlen;
 
             while (len > 0) {
@@ -111,20 +111,20 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
         fn fixedDistanceCode(self: *Self, code: u8) !void {
             try self.rdr.ensureBits(5 + 5 + 13, 5);
             const length = try self.decodeLength(code);
-            const distance = try self.decodeDistance(self.rdr.readBuffered(u5));
+            const distance = try self.decodeDistance(try self.rdr.read(u5, F.buffered));
             self.win.writeCopy(length, distance);
         }
 
         fn initDynamicBlock(self: *Self) !void {
-            const hlit: u16 = @as(u16, try self.rdr.read(u5)) + 257; // number of ll code entries present - 257
-            const hdist: u16 = @as(u16, try self.rdr.read(u5)) + 1; // number of distance code entries - 1
-            const hclen: u8 = @as(u8, try self.rdr.read(u4)) + 4; // hclen + 4 code lenths are encoded
+            const hlit: u16 = @as(u16, try self.rdr.read(u5, 0)) + 257; // number of ll code entries present - 257
+            const hdist: u16 = @as(u16, try self.rdr.read(u5, 0)) + 1; // number of distance code entries - 1
+            const hclen: u8 = @as(u8, try self.rdr.read(u4, 0)) + 4; // hclen + 4 code lenths are encoded
 
             // lengths for code lengths
             var cl_l = [_]u4{0} ** 19;
             const order = consts.huffman.codegen_order;
             for (0..hclen) |i| {
-                cl_l[order[i]] = try self.rdr.read(u3);
+                cl_l[order[i]] = try self.rdr.read(u3, 0);
             }
             self.cl_h.build(&cl_l);
 
@@ -132,7 +132,7 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
             var lit_l = [_]u4{0} ** (286);
             var pos: usize = 0;
             while (pos < hlit) {
-                const sym = self.cl_h.find(try self.rdr.peekCode(u7));
+                const sym = self.cl_h.find(try self.rdr.read(u7, F.peek | F.reverse));
                 self.rdr.advance(sym.code_bits);
                 pos += try self.dynamicCodeLength(sym.symbol, &lit_l, pos);
             }
@@ -141,7 +141,7 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
             var dst_l = [_]u4{0} ** (30);
             pos = 0;
             while (pos < hdist) {
-                const sym = self.cl_h.find(try self.rdr.peekCode(u7));
+                const sym = self.cl_h.find(try self.rdr.read(u7, F.peek | F.reverse));
                 self.rdr.advance(sym.code_bits);
                 pos += try self.dynamicCodeLength(sym.symbol, &dst_l, pos);
             }
@@ -150,10 +150,12 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
             self.dst_h.build(&dst_l);
         }
 
+        const F = BitReaderType.flag;
+
         fn dynamicBlock(self: *Self) !bool {
             while (!self.windowFull()) {
                 try self.rdr.ensureBits(15, 2);
-                const sym = self.lit_h.find(self.rdr.peekBufferedCode(u15));
+                const sym = self.lit_h.find(try self.rdr.read(u15, F.peek | F.buffered | F.reverse));
                 self.rdr.advance(sym.code_bits);
 
                 if (sym.kind == .literal) {
@@ -169,7 +171,7 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
                 try self.rdr.ensureBits(33, 2);
                 const length = try self.decodeLength(sym.symbol);
 
-                const dsm = self.dst_h.find(self.rdr.peekBufferedCode(u15)); // distance symbol
+                const dsm = self.dst_h.find(try self.rdr.read(u15, F.peek | F.buffered | F.reverse)); // distance symbol
                 self.rdr.advance(dsm.code_bits);
 
                 const distance = try self.decodeDistance(dsm.symbol);
@@ -186,16 +188,16 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
                 16 => {
                     // Copy the previous code length 3 - 6 times.
                     // The next 2 bits indicate repeat length
-                    const n: u8 = @as(u8, try self.rdr.read(u2)) + 3;
+                    const n: u8 = @as(u8, try self.rdr.read(u2, 0)) + 3;
                     for (0..n) |i| {
                         lens[pos + i] = lens[pos + i - 1];
                     }
                     return n;
                 },
                 // Repeat a code length of 0 for 3 - 10 times. (3 bits of length)
-                17 => return @as(u8, try self.rdr.read(u3)) + 3,
+                17 => return @as(u8, try self.rdr.read(u3, 0)) + 3,
                 // Repeat a code length of 0 for 11 - 138 times (7 bits of length)
-                18 => return @as(u8, try self.rdr.read(u7)) + 11,
+                18 => return @as(u8, try self.rdr.read(u7, 0)) + 11,
                 else => {
                     // Represent code lengths of 0 - 15
                     lens[pos] = @intCast(code);
@@ -211,8 +213,8 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
                     self.state = .header;
                 },
                 .header => {
-                    self.bfinal = try self.rdr.read(u1);
-                    self.block_type = try self.rdr.read(u2);
+                    self.bfinal = try self.rdr.read(u1, 0);
+                    self.block_type = try self.rdr.read(u2, 0);
                     self.state = .block;
                     if (self.block_type == 2) try self.initDynamicBlock();
                 },
