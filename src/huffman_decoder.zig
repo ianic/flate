@@ -21,7 +21,7 @@ pub const Symbol = packed struct {
 };
 
 pub const LiteralDecoder = HuffmanDecoder(286, 15, 9);
-pub const OffsetDecoder = HuffmanDecoder(30, 15, 9);
+pub const DistanceDecoder = HuffmanDecoder(30, 15, 9);
 pub const CodegenDecoder = HuffmanDecoder(19, 7, 0);
 
 /// Creates huffman tree codes from list of code lengths.

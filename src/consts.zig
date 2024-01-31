@@ -35,10 +35,10 @@ pub const huffman = struct {
     // The number of codegen codes.
     pub const codegen_code_count = 19;
 
-    // The largest offset code.
-    pub const offset_code_count = 30;
+    // The largest distance code.
+    pub const distance_code_count = 30;
     // Max number of frequencies used for a Huffman Code
-    // Possible lengths are codegenCodeCount (19), offset_code_count (30) and max_num_lit (286).
+    // Possible lengths are codegenCodeCount (19), distance_code_count (30) and max_num_lit (286).
     // The largest of these is max_num_lit.
     pub const max_num_frequencies = max_num_lit;
     // Maximum number of literals.

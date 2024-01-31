@@ -35,7 +35,7 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
 
         // dynamic block huffman codes
         lit_h: hfd.LiteralDecoder = .{}, // literals
-        dst_h: hfd.OffsetDecoder = .{}, // distances
+        dst_h: hfd.DistanceDecoder = .{}, // distances
         cl_h: hfd.CodegenDecoder = .{}, // code lengths
 
         // current read state
@@ -115,11 +115,11 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
 
         inline fn decodeDistance(self: *Self, code: u8) !u16 {
             assert(code <= 29);
-            const mo = Token.matchOffset(code);
-            return if (mo.extra_bits == 0) // 0 - 13 extra bits
-                mo.base
+            const md = Token.matchDistance(code);
+            return if (md.extra_bits == 0) // 0 - 13 extra bits
+                md.base
             else
-                mo.base + try self.bits.readN(mo.extra_bits, F.buffered);
+                md.base + try self.bits.readN(md.extra_bits, F.buffered);
         }
 
         fn dynamicBlockHeader(self: *Self) !void {

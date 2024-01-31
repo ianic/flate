@@ -292,7 +292,7 @@ pub fn huffmanEncoder(comptime size: u32) HuffmanEncoder(size) {
 }
 
 pub const LiteralEncoder = HuffmanEncoder(consts.huffman.max_num_frequencies);
-pub const OffsetEncoder = HuffmanEncoder(consts.huffman.offset_code_count);
+pub const DistanceEncoder = HuffmanEncoder(consts.huffman.distance_code_count);
 pub const CodegenEncoder = HuffmanEncoder(19);
 
 // Generates a HuffmanCode corresponding to the fixed literal table
@@ -330,21 +330,21 @@ pub fn fixedLiteralEncoder() LiteralEncoder {
     return h;
 }
 
-pub fn fixedOffsetEncoder() OffsetEncoder {
-    var h: OffsetEncoder = undefined;
+pub fn fixedDistanceEncoder() DistanceEncoder {
+    var h: DistanceEncoder = undefined;
     for (h.codes, 0..) |_, ch| {
         h.codes[ch] = HuffCode{ .code = bitReverse(u16, @as(u16, @intCast(ch)), 5), .len = 5 };
     }
     return h;
 }
 
-pub fn huffmanOffsetEncoder() OffsetEncoder {
-    var offset_freq = [1]u16{0} ** consts.huffman.offset_code_count;
-    offset_freq[0] = 1;
-    // huff_offset is a static offset encoder used for huffman only encoding.
-    // It can be reused since we will not be encoding offset values.
-    var h: OffsetEncoder = .{};
-    h.generate(offset_freq[0..], 15);
+pub fn huffmanDistanceEncoder() DistanceEncoder {
+    var distance_freq = [1]u16{0} ** consts.huffman.distance_code_count;
+    distance_freq[0] = 1;
+    // huff_distance is a static distance encoder used for huffman only encoding.
+    // It can be reused since we will not be encoding distance values.
+    var h: DistanceEncoder = .{};
+    h.generate(distance_freq[0..], 15);
     return h;
 }
 
@@ -444,8 +444,8 @@ test "generate a Huffman code for the fixed literal table specific to Deflate" {
     }
 }
 
-test "generate a Huffman code for the 30 possible relative offsets (LZ77 distances) of Deflate" {
-    const enc = fixedOffsetEncoder();
+test "generate a Huffman code for the 30 possible relative distances (LZ77 distances) of Deflate" {
+    const enc = fixedDistanceEncoder();
     for (enc.codes) |c| {
         const v = @bitReverse(@as(u5, @intCast(c.code)));
         try testing.expect(v <= 29);

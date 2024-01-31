@@ -22,21 +22,21 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
 
         codegen_freq: [consts.huffman.codegen_code_count]u16 = undefined,
         literal_freq: [consts.huffman.max_num_lit]u16 = undefined,
-        offset_freq: [consts.huffman.offset_code_count]u16 = undefined,
-        codegen: [consts.huffman.max_num_lit + consts.huffman.offset_code_count + 1]u8 = undefined,
+        distance_freq: [consts.huffman.distance_code_count]u16 = undefined,
+        codegen: [consts.huffman.max_num_lit + consts.huffman.distance_code_count + 1]u8 = undefined,
         literal_encoding: hc.LiteralEncoder = .{},
-        offset_encoding: hc.OffsetEncoder = .{},
+        distance_encoding: hc.DistanceEncoder = .{},
         codegen_encoding: hc.CodegenEncoder = .{},
         fixed_literal_encoding: hc.LiteralEncoder,
-        fixed_offset_encoding: hc.OffsetEncoder,
-        huff_offset: hc.OffsetEncoder,
+        fixed_distance_encoding: hc.DistanceEncoder,
+        huff_distance: hc.DistanceEncoder,
 
         pub fn init(writer: WriterType) Self {
             return .{
                 .bit_writer = BitWriterType.init(writer),
                 .fixed_literal_encoding = hc.fixedLiteralEncoder(),
-                .fixed_offset_encoding = hc.fixedOffsetEncoder(),
-                .huff_offset = hc.huffmanOffsetEncoder(),
+                .fixed_distance_encoding = hc.fixedDistanceEncoder(),
+                .huff_distance = hc.huffmanDistanceEncoder(),
             };
         }
 
@@ -53,7 +53,7 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
         }
 
         // RFC 1951 3.2.7 specifies a special run-length encoding for specifying
-        // the literal and offset lengths arrays (which are concatenated into a single
+        // the literal and distance lengths arrays (which are concatenated into a single
         // array).  This method generates that run-length encoding.
         //
         // The result is written into the codegen array, and the frequencies
@@ -62,15 +62,15 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
         // information. Code bad_code is an end marker
         //
         // num_literals: The number of literals in literal_encoding
-        // num_offsets: The number of offsets in offset_encoding
+        // num_distances: The number of distances in distance_encoding
         // lit_enc: The literal encoder to use
-        // off_enc: The offset encoder to use
+        // dist_enc: The distance encoder to use
         fn generateCodegen(
             self: *Self,
             num_literals: u32,
-            num_offsets: u32,
+            num_distances: u32,
             lit_enc: *hc.LiteralEncoder,
-            off_enc: *hc.OffsetEncoder,
+            dist_enc: *hc.DistanceEncoder,
         ) void {
             for (self.codegen_freq, 0..) |_, i| {
                 self.codegen_freq[i] = 0;
@@ -87,11 +87,11 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
                 cgnl[i] = @as(u8, @intCast(lit_enc.codes[i].len));
             }
 
-            cgnl = codegen[num_literals .. num_literals + num_offsets];
+            cgnl = codegen[num_literals .. num_literals + num_distances];
             for (cgnl, 0..) |_, i| {
-                cgnl[i] = @as(u8, @intCast(off_enc.codes[i].len));
+                cgnl[i] = @as(u8, @intCast(dist_enc.codes[i].len));
             }
-            codegen[num_literals + num_offsets] = end_code_mark;
+            codegen[num_literals + num_distances] = end_code_mark;
 
             var size = codegen[0];
             var count: i32 = 1;
@@ -169,7 +169,7 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
         fn dynamicSize(
             self: *Self,
             lit_enc: *hc.LiteralEncoder, // literal encoder
-            off_enc: *hc.OffsetEncoder, // offset encoder
+            dist_enc: *hc.DistanceEncoder, // distance encoder
             extra_bits: u32,
         ) DynamicSize {
             var num_codegens = self.codegen_freq.len;
@@ -183,7 +183,7 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
                 self.codegen_freq[18] * 7;
             const size = header +
                 lit_enc.bitLength(&self.literal_freq) +
-                off_enc.bitLength(&self.offset_freq) +
+                dist_enc.bitLength(&self.distance_freq) +
                 extra_bits;
 
             return DynamicSize{
@@ -196,7 +196,7 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
         fn fixedSize(self: *Self, extra_bits: u32) u32 {
             return 3 +
                 self.fixed_literal_encoding.bitLength(&self.literal_freq) +
-                self.fixed_offset_encoding.bitLength(&self.offset_freq) +
+                self.fixed_distance_encoding.bitLength(&self.distance_freq) +
                 extra_bits;
         }
 
@@ -221,20 +221,20 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
         // Write the header of a dynamic Huffman block to the output stream.
         //
         //  num_literals: The number of literals specified in codegen
-        //  num_offsets: The number of offsets specified in codegen
+        //  num_distances: The number of distances specified in codegen
         //  num_codegens: The number of codegens used in codegen
         //  eof: Is it the end-of-file? (end of stream)
         fn writeDynamicHeader(
             self: *Self,
             num_literals: u32,
-            num_offsets: u32,
+            num_distances: u32,
             num_codegens: u32,
             eof: bool,
         ) Error!void {
             const first_bits: u32 = if (eof) 5 else 4;
             try self.bit_writer.writeBits(first_bits, 3);
             try self.bit_writer.writeBits(num_literals - 257, 5);
-            try self.bit_writer.writeBits(num_offsets - 1, 5);
+            try self.bit_writer.writeBits(num_distances - 1, 5);
             try self.bit_writer.writeBits(num_codegens - 4, 4);
 
             var i: u32 = 0;
@@ -299,9 +299,9 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
             eof: bool,
             input: ?[]const u8,
         ) Error!void {
-            const lit_and_off = self.indexTokens(tokens);
-            const num_literals = lit_and_off.num_literals;
-            const num_offsets = lit_and_off.num_offsets;
+            const lit_and_dist = self.indexTokens(tokens);
+            const num_literals = lit_and_dist.num_literals;
+            const num_distances = lit_and_dist.num_distances;
 
             var extra_bits: u32 = 0;
             const ret = storedSizeFits(input);
@@ -310,7 +310,7 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
 
             if (storable) {
                 // We only bother calculating the costs of the extra bits required by
-                // the length of offset fields (which will be the same for both fixed
+                // the length of distance fields (which will be the same for both fixed
                 // and dynamic encoding), if we need to compare those two encodings
                 // against stored encoding.
                 var length_code: u16 = Token.length_codes_start + 8;
@@ -319,35 +319,35 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
                     extra_bits += @as(u32, @intCast(self.literal_freq[length_code])) *
                         @as(u32, @intCast(Token.lengthExtraBits(length_code)));
                 }
-                var offset_code: u16 = 4;
-                while (offset_code < num_offsets) : (offset_code += 1) {
-                    // First four offset codes have extra size = 0.
-                    extra_bits += @as(u32, @intCast(self.offset_freq[offset_code])) *
-                        @as(u32, @intCast(Token.offsetExtraBits(offset_code)));
+                var distance_code: u16 = 4;
+                while (distance_code < num_distances) : (distance_code += 1) {
+                    // First four distance codes have extra size = 0.
+                    extra_bits += @as(u32, @intCast(self.distance_freq[distance_code])) *
+                        @as(u32, @intCast(Token.distanceExtraBits(distance_code)));
                 }
             }
 
             // Figure out smallest code.
             // Fixed Huffman baseline.
             var literal_encoding = &self.fixed_literal_encoding;
-            var offset_encoding = &self.fixed_offset_encoding;
+            var distance_encoding = &self.fixed_distance_encoding;
             var size = self.fixedSize(extra_bits);
 
             // Dynamic Huffman?
             var num_codegens: u32 = 0;
 
             // Generate codegen and codegenFrequencies, which indicates how to encode
-            // the literal_encoding and the offset_encoding.
+            // the literal_encoding and the distance_encoding.
             self.generateCodegen(
                 num_literals,
-                num_offsets,
+                num_distances,
                 &self.literal_encoding,
-                &self.offset_encoding,
+                &self.distance_encoding,
             );
             self.codegen_encoding.generate(self.codegen_freq[0..], 7);
             const dynamic_size = self.dynamicSize(
                 &self.literal_encoding,
-                &self.offset_encoding,
+                &self.distance_encoding,
                 extra_bits,
             );
             const dyn_size = dynamic_size.size;
@@ -356,7 +356,7 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
             if (dyn_size < size) {
                 size = dyn_size;
                 literal_encoding = &self.literal_encoding;
-                offset_encoding = &self.offset_encoding;
+                distance_encoding = &self.distance_encoding;
             }
 
             // Stored bytes?
@@ -369,11 +369,11 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
             if (@intFromPtr(literal_encoding) == @intFromPtr(&self.fixed_literal_encoding)) {
                 try self.writeFixedHeader(eof);
             } else {
-                try self.writeDynamicHeader(num_literals, num_offsets, num_codegens, eof);
+                try self.writeDynamicHeader(num_literals, num_distances, num_codegens, eof);
             }
 
             // Write the tokens.
-            try self.writeTokens(tokens, &literal_encoding.codes, &offset_encoding.codes);
+            try self.writeTokens(tokens, &literal_encoding.codes, &distance_encoding.codes);
         }
 
         fn writeBlockStored(self: *Self, input: []const u8, eof: bool) Error!void {
@@ -394,18 +394,18 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
         ) Error!void {
             const total_tokens = self.indexTokens(tokens);
             const num_literals = total_tokens.num_literals;
-            const num_offsets = total_tokens.num_offsets;
+            const num_distances = total_tokens.num_distances;
 
             // Generate codegen and codegenFrequencies, which indicates how to encode
-            // the literal_encoding and the offset_encoding.
+            // the literal_encoding and the distance_encoding.
             self.generateCodegen(
                 num_literals,
-                num_offsets,
+                num_distances,
                 &self.literal_encoding,
-                &self.offset_encoding,
+                &self.distance_encoding,
             );
             self.codegen_encoding.generate(self.codegen_freq[0..], 7);
-            const dynamic_size = self.dynamicSize(&self.literal_encoding, &self.offset_encoding, 0);
+            const dynamic_size = self.dynamicSize(&self.literal_encoding, &self.distance_encoding, 0);
             const size = dynamic_size.size;
             const num_codegens = dynamic_size.num_codegens;
 
@@ -420,30 +420,30 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
             }
 
             // Write Huffman table.
-            try self.writeDynamicHeader(num_literals, num_offsets, num_codegens, eof);
+            try self.writeDynamicHeader(num_literals, num_distances, num_codegens, eof);
 
             // Write the tokens.
-            try self.writeTokens(tokens, &self.literal_encoding.codes, &self.offset_encoding.codes);
+            try self.writeTokens(tokens, &self.literal_encoding.codes, &self.distance_encoding.codes);
         }
 
         const TotalIndexedTokens = struct {
             num_literals: u32,
-            num_offsets: u32,
+            num_distances: u32,
         };
 
         // Indexes a slice of tokens followed by an end_block_marker, and updates
-        // literal_freq and offset_freq, and generates literal_encoding
-        // and offset_encoding.
-        // The number of literal and offset tokens is returned.
+        // literal_freq and distance_freq, and generates literal_encoding
+        // and distance_encoding.
+        // The number of literal and distance tokens is returned.
         fn indexTokens(self: *Self, tokens: []const Token) TotalIndexedTokens {
             var num_literals: u32 = 0;
-            var num_offsets: u32 = 0;
+            var num_distances: u32 = 0;
 
             for (self.literal_freq, 0..) |_, i| {
                 self.literal_freq[i] = 0;
             }
-            for (self.offset_freq, 0..) |_, i| {
-                self.offset_freq[i] = 0;
+            for (self.distance_freq, 0..) |_, i| {
+                self.distance_freq[i] = 0;
             }
 
             for (tokens) |t| {
@@ -452,7 +452,7 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
                     continue;
                 }
                 self.literal_freq[t.lengthCode()] += 1;
-                self.offset_freq[t.offsetCode()] += 1;
+                self.distance_freq[t.distanceCode()] += 1;
             }
             // add end_block_marker token at the end
             self.literal_freq[consts.end_block_marker] += 1;
@@ -462,27 +462,27 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
             while (self.literal_freq[num_literals - 1] == 0) {
                 num_literals -= 1;
             }
-            // get the number of offsets
-            num_offsets = @as(u32, @intCast(self.offset_freq.len));
-            while (num_offsets > 0 and self.offset_freq[num_offsets - 1] == 0) {
-                num_offsets -= 1;
+            // get the number of distances
+            num_distances = @as(u32, @intCast(self.distance_freq.len));
+            while (num_distances > 0 and self.distance_freq[num_distances - 1] == 0) {
+                num_distances -= 1;
             }
-            if (num_offsets == 0) {
+            if (num_distances == 0) {
                 // We haven't found a single match. If we want to go with the dynamic encoding,
-                // we should count at least one offset to be sure that the offset huffman tree could be encoded.
-                self.offset_freq[0] = 1;
-                num_offsets = 1;
+                // we should count at least one distance to be sure that the distance huffman tree could be encoded.
+                self.distance_freq[0] = 1;
+                num_distances = 1;
             }
             self.literal_encoding.generate(&self.literal_freq, 15);
-            self.offset_encoding.generate(&self.offset_freq, 15);
+            self.distance_encoding.generate(&self.distance_freq, 15);
             return TotalIndexedTokens{
                 .num_literals = num_literals,
-                .num_offsets = num_offsets,
+                .num_distances = num_distances,
             };
         }
 
         // Writes a slice of tokens to the output followed by and end_block_marker.
-        // codes for literal and offset encoding must be supplied.
+        // codes for literal and distance encoding must be supplied.
         fn writeTokens(
             self: *Self,
             tokens: []const Token,
@@ -502,11 +502,11 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
                     try self.bit_writer.writeBits(le.extra_length, le.extra_bits);
                 }
 
-                // Write the offset
-                const oe = t.offsetEncoding();
+                // Write the distance
+                const oe = t.distanceEncoding();
                 try self.writeCode(oe_codes[oe.code]);
                 if (oe.extra_bits > 0) {
-                    try self.bit_writer.writeBits(oe.extra_offset, oe.extra_bits);
+                    try self.bit_writer.writeBits(oe.extra_distance, oe.extra_bits);
                 }
             }
             // add end_block_marker at the end
@@ -527,8 +527,8 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
             self.literal_freq[consts.end_block_marker] = 1;
 
             const num_literals = consts.end_block_marker + 1;
-            self.offset_freq[0] = 1;
-            const num_offsets = 1;
+            self.distance_freq[0] = 1;
+            const num_distances = 1;
 
             self.literal_encoding.generate(&self.literal_freq, 15);
 
@@ -537,15 +537,15 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
             var num_codegens: u32 = 0;
 
             // Generate codegen and codegenFrequencies, which indicates how to encode
-            // the literal_encoding and the offset_encoding.
+            // the literal_encoding and the distance_encoding.
             self.generateCodegen(
                 num_literals,
-                num_offsets,
+                num_distances,
                 &self.literal_encoding,
-                &self.huff_offset,
+                &self.huff_distance,
             );
             self.codegen_encoding.generate(self.codegen_freq[0..], 7);
-            const dynamic_size = self.dynamicSize(&self.literal_encoding, &self.huff_offset, 0);
+            const dynamic_size = self.dynamicSize(&self.literal_encoding, &self.huff_distance, 0);
             const size = dynamic_size.size;
             num_codegens = dynamic_size.num_codegens;
 
@@ -560,7 +560,7 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
             }
 
             // Huffman.
-            try self.writeDynamicHeader(num_literals, num_offsets, num_codegens, eof);
+            try self.writeDynamicHeader(num_literals, num_distances, num_codegens, eof);
             const encoding = self.literal_encoding.codes[0..257];
 
             for (input) |t| {

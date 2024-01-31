@@ -736,7 +736,7 @@ fn TokenDecoder(comptime WriterType: type) type {
             for (tokens) |t| {
                 switch (t.kind) {
                     .literal => self.win.write(t.literal()),
-                    .match => self.win.writeCopy(t.length(), t.offset()),
+                    .match => self.win.writeCopy(t.length(), t.distance()),
                 }
                 if (self.win.free() < 285) try self.flushWin();
             }

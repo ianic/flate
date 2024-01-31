@@ -90,8 +90,8 @@ const match_lengths = [_]MatchLength{
     .{ .extra_bits = 0, .base_scaled = 255, .base = 258, .code = 285 },
 };
 
-// Used in offsetCode fn to get index in match_offset table for each offset in range 0-32767.
-const match_offsets_index = [_]u8{
+// Used in distanceCode fn to get index in match_distance table for each distance in range 0-32767.
+const match_distances_index = [_]u8{
     0,  1,  2,  3,  4,  4,  5,  5,  6,  6,  6,  6,  7,  7,  7,  7,
     8,  8,  8,  8,  8,  8,  8,  8,  9,  9,  9,  9,  9,  9,  9,  9,
     10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10,
@@ -110,15 +110,15 @@ const match_offsets_index = [_]u8{
     15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
 };
 
-const MatchOffset = struct {
-    base_scaled: u16, // base - 1, same as Token off field
+const MatchDistance = struct {
+    base_scaled: u16, // base - 1, same as Token dist field
     base: u16,
-    extra_offset: u16 = 0,
+    extra_distance: u16 = 0,
     code: u8,
     extra_bits: u4,
 };
 
-// match_offsets represents table from rfc (https://datatracker.ietf.org/doc/html/rfc1951#page-12)
+// match_distances represents table from rfc (https://datatracker.ietf.org/doc/html/rfc1951#page-12)
 //
 //      Extra           Extra               Extra
 // Code Bits Dist  Code Bits   Dist     Code Bits Distance
@@ -134,7 +134,7 @@ const MatchOffset = struct {
 //   8   3  17-24   18   8    513-768   28   13 16385-24576
 //   9   3  25-32   19   8   769-1024   29   13 24577-32768
 //
-const match_offsets = [_]MatchOffset{
+const match_distances = [_]MatchDistance{
     .{ .extra_bits = 0, .base_scaled = 0x0000, .code = 0, .base = 1 },
     .{ .extra_bits = 0, .base_scaled = 0x0001, .code = 1, .base = 2 },
     .{ .extra_bits = 0, .base_scaled = 0x0002, .code = 2, .base = 3 },
@@ -174,8 +174,8 @@ pub const Kind = enum(u1) {
     match,
 };
 
-// offset range 1 - 32768, stored in off as 0 - 32767 (u16)
-off: u15 = 0,
+// distance range 1 - 32768, stored in dist as 0 - 32767 (u16)
+dist: u15 = 0,
 // length range 3 - 258, stored in len_lit as 0 - 255 (u8)
 len_lit: u8 = 0,
 kind: Kind = .literal,
@@ -184,8 +184,8 @@ pub fn literal(t: Token) u8 {
     return t.len_lit;
 }
 
-pub fn offset(t: Token) u16 {
-    return @as(u16, t.off) + consts.match.min_distance;
+pub fn distance(t: Token) u16 {
+    return @as(u16, t.dist) + consts.match.min_distance;
 }
 
 pub fn length(t: Token) u16 {
@@ -196,21 +196,21 @@ pub fn initLiteral(lit: u8) Token {
     return .{ .kind = .literal, .len_lit = lit };
 }
 
-// offset range 1 - 32768, stored in off as 0 - 32767 (u16)
+// distance range 1 - 32768, stored in dist as 0 - 32767 (u16)
 // length range 3 - 258, stored in len_lit as 0 - 255 (u8)
-pub fn initMatch(off: u16, len: u16) Token {
+pub fn initMatch(dist: u16, len: u16) Token {
     assert(len >= consts.match.min_length and len <= consts.match.max_length);
-    assert(off >= consts.match.min_distance and off <= consts.match.max_distance);
+    assert(dist >= consts.match.min_distance and dist <= consts.match.max_distance);
     return .{
         .kind = .match,
-        .off = @intCast(off - consts.match.min_distance),
+        .dist = @intCast(dist - consts.match.min_distance),
         .len_lit = @intCast(len - consts.match.base_length),
     };
 }
 
 pub fn eql(t: Token, o: Token) bool {
     return t.kind == o.kind and
-        t.off == o.off and
+        t.dist == o.dist and
         t.len_lit == o.len_lit;
 }
 
@@ -224,24 +224,24 @@ pub fn lengthEncoding(t: Token) MatchLength {
     return c;
 }
 
-// Returns the offset code corresponding to a specific offset.
-// Offset code is in range: 0 - 29.
-pub fn offsetCode(t: Token) u8 {
-    var off: u16 = t.off;
-    if (off < match_offsets_index.len) {
-        return match_offsets_index[off];
+// Returns the distance code corresponding to a specific distance.
+// Distance code is in range: 0 - 29.
+pub fn distanceCode(t: Token) u8 {
+    var dist: u16 = t.dist;
+    if (dist < match_distances_index.len) {
+        return match_distances_index[dist];
     }
-    off >>= 7;
-    if (off < match_offsets_index.len) {
-        return match_offsets_index[off] + 14;
+    dist >>= 7;
+    if (dist < match_distances_index.len) {
+        return match_distances_index[dist] + 14;
     }
-    off >>= 7;
-    return match_offsets_index[off] + 28;
+    dist >>= 7;
+    return match_distances_index[dist] + 28;
 }
 
-pub fn offsetEncoding(t: Token) MatchOffset {
-    var c = match_offsets[t.offsetCode()];
-    c.extra_offset = t.off - c.base_scaled;
+pub fn distanceEncoding(t: Token) MatchDistance {
+    var c = match_distances[t.distanceCode()];
+    c.extra_distance = t.dist - c.base_scaled;
     return c;
 }
 
@@ -253,19 +253,19 @@ pub fn matchLength(code: u8) MatchLength {
     return match_lengths[code];
 }
 
-pub fn matchOffset(code: u8) MatchOffset {
-    return match_offsets[code];
+pub fn matchDistance(code: u8) MatchDistance {
+    return match_distances[code];
 }
 
-pub fn offsetExtraBits(code: u32) u8 {
-    return match_offsets[code].extra_bits;
+pub fn distanceExtraBits(code: u32) u8 {
+    return match_distances[code].extra_bits;
 }
 
 pub fn show(t: Token) void {
     if (t.kind == .literal) {
         print("L('{c}'), ", .{t.literal()});
     } else {
-        print("M({d}, {d}), ", .{ t.offset(), t.length() });
+        print("M({d}, {d}), ", .{ t.distance(), t.length() });
     }
 }
 
@@ -299,16 +299,16 @@ test "MatchLength" {
     try expect(c.extra_length == 130 - 115);
 }
 
-test "MatchOffset" {
-    var c = Token.initMatch(1, 4).offsetEncoding();
+test "MatchDistance" {
+    var c = Token.initMatch(1, 4).distanceEncoding();
     try expect(c.code == 0);
     try expect(c.extra_bits == 0);
-    try expect(c.extra_offset == 0);
+    try expect(c.extra_distance == 0);
 
-    c = Token.initMatch(192, 4).offsetEncoding();
+    c = Token.initMatch(192, 4).distanceEncoding();
     try expect(c.code == 14);
     try expect(c.extra_bits == 6);
-    try expect(c.extra_offset == 192 - 129);
+    try expect(c.extra_distance == 192 - 129);
 }
 
 test "match_lengths" {
@@ -317,7 +317,7 @@ test "match_lengths" {
         try expect(i + 257 == ml.code);
     }
 
-    for (match_offsets, 0..) |mo, i| {
+    for (match_distances, 0..) |mo, i| {
         try expect(mo.base_scaled + 1 == mo.base);
         try expect(i == mo.code);
     }
