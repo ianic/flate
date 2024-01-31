@@ -28,31 +28,34 @@ pub fn BitReader(comptime ReaderType: type) type {
 
         pub fn init(rdr: ReaderType) Self {
             var self = Self{ .rdr = rdr };
-            self.ensureBits(1, 0) catch {};
+            self.fill(1) catch {};
             return self;
         }
 
         // Ensure that `nice` or at least `must` bits are available in buffer.
         // Reads from underlying reader if there is no `nice` bits in buffer.
         // Returns error if `must` bits can't be read.
-        pub inline fn ensureBits(self: *Self, nice: u6, must: u6) !void {
-            if (nice > self.nbits) {
-                // read more bits from underlying reader
-                var buf: [8]u8 = [_]u8{0} ** 8;
+        pub inline fn fill(self: *Self, nice: u6) !void {
+            if (self.nbits >= nice)
+                return; // we have enought bits
 
-                const empty_bytes =
-                    @as(u8, if (self.nbits & 0x7 == 0) 8 else 7) - // 8 for 8, 16, 24..., 7 otherwise
-                    (self.nbits >> 3); // 0 for 0-7, 1 for 8-16, ... same as / 8
+            // read more bits from underlying reader
+            var buf: [8]u8 = [_]u8{0} ** 8;
+            // number of empty bytes in bits
+            const empty_bytes =
+                @as(u8, if (self.nbits & 0x7 == 0) 8 else 7) - // 8 for 8, 16, 24..., 7 otherwise
+                (self.nbits >> 3); // 0 for 0-7, 1 for 8-16, ... same as / 8
 
-                const bytes_read = self.rdr.read(buf[0..empty_bytes]) catch 0;
-                if (bytes_read > 0) {
-                    const u: u64 = std.mem.readInt(u64, buf[0..8], .little);
-                    self.bits |= u << @as(u6, @intCast(self.nbits));
-                    self.nbits += 8 * @as(u8, @intCast(bytes_read));
-                }
-                // than check again
-                if (must > self.nbits) return error.EndOfStream;
+            const bytes_read = self.rdr.read(buf[0..empty_bytes]) catch 0;
+            if (bytes_read > 0) {
+                const u: u64 = std.mem.readInt(u64, buf[0..8], .little);
+                self.bits |= u << @as(u6, @intCast(self.nbits));
+                self.nbits += 8 * @as(u8, @intCast(bytes_read));
+                return;
             }
+
+            if (self.bits == 0)
+                return error.EndOfStream;
         }
 
         // Read exactly buf.len bytes into buf.
@@ -77,33 +80,33 @@ pub fn BitReader(comptime ReaderType: type) type {
             const n: u6 = @bitSizeOf(U);
             switch (how) {
                 0 => {
-                    try self.ensureBits(n, n);
+                    try self.fill(n);
                     const u: U = @truncate(self.bits);
-                    self.advance(n);
+                    self.shift(n);
                     return u;
                 },
                 (flag.peek) => {
-                    try self.ensureBits(n, n);
+                    try self.fill(n);
                     return @as(U, @truncate(self.bits));
                 },
                 flag.buffered => {
                     const u: U = @truncate(self.bits);
-                    self.advance(n);
+                    self.shift(n);
                     return u;
                 },
                 (flag.reverse) => {
-                    try self.ensureBits(n, n);
+                    try self.fill(n);
                     const u: U = @truncate(self.bits);
-                    self.advance(n);
+                    self.shift(n);
                     return @bitReverse(u);
                 },
                 (flag.peek | flag.reverse) => {
-                    try self.ensureBits(n, n);
+                    try self.fill(n);
                     return @bitReverse(@as(U, @truncate(self.bits)));
                 },
                 (flag.buffered | flag.reverse) => {
                     const u: U = @truncate(self.bits);
-                    self.advance(n);
+                    self.shift(n);
                     return @bitReverse(u);
                 },
                 (flag.peek | flag.buffered | flag.reverse) => {
@@ -113,27 +116,22 @@ pub fn BitReader(comptime ReaderType: type) type {
             }
         }
 
-        pub inline fn readBits(self: *Self, n: u4, comptime how: u3) !u16 {
+        pub inline fn readN(self: *Self, n: u4, comptime how: u3) !u16 {
             switch (how) {
                 0 => {
-                    try self.ensureBits(n, n);
-                    const mask: u16 = (@as(u16, 1) << n) - 1;
-                    const u: u16 = @as(u16, @truncate(self.bits)) & mask;
-                    self.advance(n);
-                    return u;
+                    try self.fill(n);
                 },
-                flag.buffered => {
-                    const mask: u16 = (@as(u16, 1) << n) - 1;
-                    const u: u16 = @as(u16, @truncate(self.bits)) & mask;
-                    self.advance(n);
-                    return u;
-                },
+                flag.buffered => {},
                 else => unreachable,
             }
+            const mask: u16 = (@as(u16, 1) << n) - 1;
+            const u: u16 = @as(u16, @truncate(self.bits)) & mask;
+            self.shift(n);
+            return u;
         }
 
         // Advance buffer for n bits.
-        pub inline fn advance(self: *Self, n: u6) void {
+        pub inline fn shift(self: *Self, n: u6) void {
             assert(n <= self.nbits);
             self.bits >>= n;
             self.nbits -= n;
@@ -142,8 +140,8 @@ pub fn BitReader(comptime ReaderType: type) type {
         // Skip n bytes.
         pub inline fn skipBytes(self: *Self, n: u16) !void {
             for (0..n) |_| {
-                try self.ensureBits(8, 8);
-                self.advance(8);
+                try self.fill(8);
+                self.shift(8);
             }
         }
 
@@ -155,7 +153,7 @@ pub fn BitReader(comptime ReaderType: type) type {
         // Align stream to the byte boundary.
         pub inline fn alignToByte(self: *Self) void {
             const ab = self.alignBits();
-            if (ab > 0) self.advance(ab);
+            if (ab > 0) self.shift(ab);
         }
 
         // Skip zero terminated string.
@@ -179,7 +177,7 @@ pub fn BitReader(comptime ReaderType: type) type {
         //          280 - 287     8          11000000 through
         //                                   11000111
         pub fn readFixedCode(self: *Self) !u16 {
-            try self.ensureBits(7 + 2, 7);
+            try self.fill(7 + 2);
             const code7 = try self.read(u7, flag.buffered | flag.reverse);
             if (code7 <= 0b0010_111) { // 7 bits, 256-279, codes 0000_000 - 0010_111
                 return @as(u16, code7) + 256;
@@ -209,7 +207,7 @@ test "BitReader" {
 
     try testing.expect(try br.read(u8, F.peek) == 0b0001_1110);
     try testing.expect(try br.read(u9, F.peek) == 0b1_0001_1110);
-    br.advance(9);
+    br.shift(9);
     try testing.expectEqual(@as(u8, 36), br.nbits);
     try testing.expectEqual(@as(u3, 4), br.alignBits());
 
@@ -217,16 +215,16 @@ test "BitReader" {
     try testing.expectEqual(@as(u8, 32), br.nbits);
     try testing.expectEqual(@as(u3, 0), br.alignBits());
 
-    br.advance(1);
+    br.shift(1);
     try testing.expectEqual(@as(u3, 7), br.alignBits());
-    br.advance(1);
+    br.shift(1);
     try testing.expectEqual(@as(u3, 6), br.alignBits());
     br.alignToByte();
     try testing.expectEqual(@as(u3, 0), br.alignBits());
 
     try testing.expectEqual(@as(u64, 0xc9), br.bits);
-    try testing.expectEqual(@as(u16, 0x9), try br.readBits(4, 0));
-    try testing.expectEqual(@as(u16, 0xc), try br.readBits(4, 0));
+    try testing.expectEqual(@as(u16, 0x9), try br.readN(4, 0));
+    try testing.expectEqual(@as(u16, 0xc), try br.readN(4, 0));
 }
 
 test "BitReader read block type 1 data" {
@@ -262,19 +260,19 @@ test "BitReader init" {
     var br = bitReader(fbs.reader());
 
     try testing.expectEqual(@as(u64, 0x08_07_06_05_04_03_02_01), br.bits);
-    br.advance(8);
+    br.shift(8);
     try testing.expectEqual(@as(u64, 0x00_08_07_06_05_04_03_02), br.bits);
-    try br.ensureBits(60, 0); // fill with 1 byte
+    try br.fill(60); // fill with 1 byte
     try testing.expectEqual(@as(u64, 0x01_08_07_06_05_04_03_02), br.bits);
-    br.advance(8 * 4 + 4);
+    br.shift(8 * 4 + 4);
     try testing.expectEqual(@as(u64, 0x00_00_00_00_00_10_80_70), br.bits);
 
-    try br.ensureBits(60, 0); // fill with 4 bytes (shift by 4)
+    try br.fill(60); // fill with 4 bytes (shift by 4)
     try testing.expectEqual(@as(u64, 0x00_50_40_30_20_10_80_70), br.bits);
     try testing.expectEqual(@as(u8, 8 * 7 + 4), br.nbits);
 
-    br.advance(@intCast(br.nbits)); // clear buffer
-    try br.ensureBits(8, 8); // refill with the rest of the bytes
+    br.shift(@intCast(br.nbits)); // clear buffer
+    try br.fill(8); // refill with the rest of the bytes
     try testing.expectEqual(@as(u64, 0x00_00_00_00_00_08_07_06), br.bits);
 }
 
