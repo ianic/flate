@@ -2,11 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 
 pub const Symbol = packed struct {
-    pub const Kind = enum(u2) {
-        literal,
-        end_of_block,
-        backreference,
-    };
+    pub const Kind = enum(u2) { literal, end_of_block, match };
 
     symbol: u8, // symbol from alphabet
     code_bits: u4, // code bits count
@@ -56,7 +52,7 @@ fn HuffmanDecoder(
                 else if (i == 256)
                     .{ .kind = .end_of_block, .symbol = 0xff, .code_bits = cb }
                 else
-                    .{ .kind = .backreference, .symbol = @intCast(i - 257), .code_bits = cb };
+                    .{ .kind = .match, .symbol = @intCast(i - 257), .code_bits = cb };
             }
             std.sort.heap(Symbol, &self.symbols, {}, Symbol.asc);
 

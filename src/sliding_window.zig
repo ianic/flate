@@ -32,8 +32,8 @@ pub const SlidingWindow = struct {
         self.wp += 1;
     }
 
-    // Write backreference starting at `distance` back from current write
-    // position, and `length` of bytes.
+    // Write match (backreference to the same data slice) starting at `distance`
+    // back from current write position, and `length` of bytes.
     pub fn writeCopy(self: *SlidingWindow, length: u16, distance: u16) void {
         assert(self.wp - self.rp < mask);
         assert(self.wp >= distance);
