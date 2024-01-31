@@ -5,9 +5,7 @@ const mem = std.mem;
 const sort = std.sort;
 const testing = std.testing;
 
-const consts = @import("consts.zig");
-
-const max_bits_limit = 16;
+const consts = @import("consts.zig").huffman;
 
 const LiteralNode = struct {
     literal: u16,
@@ -50,7 +48,7 @@ pub fn HuffmanEncoder(comptime size: usize) type {
     return struct {
         codes: [size]HuffCode = undefined,
         // Reusable buffer with the longest possible frequency table.
-        freq_cache: [consts.huffman.max_num_frequencies + 1]LiteralNode = undefined,
+        freq_cache: [consts.max_num_frequencies + 1]LiteralNode = undefined,
         bit_count: [17]u32 = undefined,
         lns: []LiteralNode = undefined, // sorted by literal, stored to avoid repeated allocation in generate
         lfs: []LiteralNode = undefined, // sorted by frequency, stored to avoid repeated allocation in generate
@@ -124,6 +122,7 @@ pub fn HuffmanEncoder(comptime size: usize) type {
         fn bitCounts(self: *Self, list: []LiteralNode, max_bits_to_use: usize) []u32 {
             var max_bits = max_bits_to_use;
             const n = list.len;
+            const max_bits_limit = 16;
 
             assert(max_bits < max_bits_limit);
 
@@ -291,8 +290,8 @@ pub fn huffmanEncoder(comptime size: u32) HuffmanEncoder(size) {
     return .{};
 }
 
-pub const LiteralEncoder = HuffmanEncoder(consts.huffman.max_num_frequencies);
-pub const DistanceEncoder = HuffmanEncoder(consts.huffman.distance_code_count);
+pub const LiteralEncoder = HuffmanEncoder(consts.max_num_frequencies);
+pub const DistanceEncoder = HuffmanEncoder(consts.distance_code_count);
 pub const CodegenEncoder = HuffmanEncoder(19);
 
 // Generates a HuffmanCode corresponding to the fixed literal table
@@ -300,7 +299,7 @@ pub fn fixedLiteralEncoder() LiteralEncoder {
     var h: LiteralEncoder = undefined;
     var ch: u16 = 0;
 
-    while (ch < consts.huffman.max_num_frequencies) : (ch += 1) {
+    while (ch < consts.max_num_frequencies) : (ch += 1) {
         var bits: u16 = undefined;
         var size: u16 = undefined;
         switch (ch) {
@@ -339,7 +338,7 @@ pub fn fixedDistanceEncoder() DistanceEncoder {
 }
 
 pub fn huffmanDistanceEncoder() DistanceEncoder {
-    var distance_freq = [1]u16{0} ** consts.huffman.distance_code_count;
+    var distance_freq = [1]u16{0} ** consts.distance_code_count;
     distance_freq[0] = 1;
     // huff_distance is a static distance encoder used for huffman only encoding.
     // It can be reused since we will not be encoding distance values.

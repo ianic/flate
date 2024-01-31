@@ -2,7 +2,7 @@ const std = @import("std");
 const io = std.io;
 
 const hc = @import("huffman_encoder.zig");
-const consts = @import("consts.zig");
+const consts = @import("consts.zig").huffman;
 const Token = @import("Token.zig");
 const BitWriter = @import("bit_writer.zig").BitWriter;
 
@@ -13,17 +13,17 @@ pub fn huffmanBitWriter(writer: anytype) HuffmanBitWriter(@TypeOf(writer)) {
 pub fn HuffmanBitWriter(comptime WriterType: type) type {
     const BitWriterType = BitWriter(WriterType);
     return struct {
-        const codegen_order = consts.huffman.codegen_order;
+        const codegen_order = consts.codegen_order;
         const end_code_mark = 255;
         const Self = @This();
 
         pub const Error = BitWriterType.Error;
         bit_writer: BitWriterType,
 
-        codegen_freq: [consts.huffman.codegen_code_count]u16 = undefined,
-        literal_freq: [consts.huffman.max_num_lit]u16 = undefined,
-        distance_freq: [consts.huffman.distance_code_count]u16 = undefined,
-        codegen: [consts.huffman.max_num_lit + consts.huffman.distance_code_count + 1]u8 = undefined,
+        codegen_freq: [consts.codegen_code_count]u16 = undefined,
+        literal_freq: [consts.max_num_lit]u16 = undefined,
+        distance_freq: [consts.distance_code_count]u16 = undefined,
+        codegen: [consts.max_num_lit + consts.distance_code_count + 1]u8 = undefined,
         literal_encoding: hc.LiteralEncoder = .{},
         distance_encoding: hc.DistanceEncoder = .{},
         codegen_encoding: hc.CodegenEncoder = .{},

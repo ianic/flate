@@ -5,9 +5,9 @@ const testing = std.testing;
 const hfd = @import("huffman_decoder.zig");
 const BitReader = @import("bit_reader.zig").BitReader;
 const SlidingWindow = @import("sliding_window.zig").SlidingWindow;
-const consts = @import("consts.zig");
 const Wrapper = @import("wrapper.zig").Wrapper;
 const Token = @import("Token.zig");
+const codegen_order = @import("consts.zig").huffman.codegen_order;
 
 pub fn decompress(comptime wrap: Wrapper, input_reader: anytype, output_writer: anytype) !void {
     var inf = decompressor(wrap, input_reader);
@@ -129,9 +129,8 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
 
             // lengths for code lengths
             var cl_l = [_]u4{0} ** 19;
-            const order = consts.huffman.codegen_order;
             for (0..hclen) |i| {
-                cl_l[order[i]] = try self.bits.read(u3);
+                cl_l[codegen_order[i]] = try self.bits.read(u3);
             }
             self.cl_h.build(&cl_l);
 

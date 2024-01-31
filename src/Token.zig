@@ -1,6 +1,6 @@
 const std = @import("std");
 const assert = std.debug.assert;
-const consts = @import("consts.zig");
+const consts = @import("consts.zig").match;
 
 // Retruns index in match_lengths table for each length in range 0-255.
 const match_lengths_index = [_]u8{
@@ -185,11 +185,11 @@ pub fn literal(t: Token) u8 {
 }
 
 pub fn distance(t: Token) u16 {
-    return @as(u16, t.dist) + consts.match.min_distance;
+    return @as(u16, t.dist) + consts.min_distance;
 }
 
 pub fn length(t: Token) u16 {
-    return @as(u16, t.len_lit) + consts.match.base_length;
+    return @as(u16, t.len_lit) + consts.base_length;
 }
 
 pub fn initLiteral(lit: u8) Token {
@@ -199,12 +199,12 @@ pub fn initLiteral(lit: u8) Token {
 // distance range 1 - 32768, stored in dist as 0 - 32767 (u16)
 // length range 3 - 258, stored in len_lit as 0 - 255 (u8)
 pub fn initMatch(dist: u16, len: u16) Token {
-    assert(len >= consts.match.min_length and len <= consts.match.max_length);
-    assert(dist >= consts.match.min_distance and dist <= consts.match.max_distance);
+    assert(len >= consts.min_length and len <= consts.max_length);
+    assert(dist >= consts.min_distance and dist <= consts.max_distance);
     return .{
         .kind = .match,
-        .dist = @intCast(dist - consts.match.min_distance),
-        .len_lit = @intCast(len - consts.match.base_length),
+        .dist = @intCast(dist - consts.min_distance),
+        .len_lit = @intCast(len - consts.base_length),
     };
 }
 

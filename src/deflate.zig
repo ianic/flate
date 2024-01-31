@@ -626,7 +626,7 @@ test "check struct sizes" {
 }
 
 const Tokens = struct {
-    list: [consts.block.tokens]Token = undefined,
+    list: [consts.deflate.tokens]Token = undefined,
     pos: usize = 0,
 
     fn add(self: *Tokens, t: Token) void {
@@ -639,7 +639,7 @@ const Tokens = struct {
     }
 
     fn full(self: *Tokens) bool {
-        return self.pos == consts.block.tokens;
+        return self.pos == consts.deflate.tokens;
     }
 
     fn reset(self: *Tokens) void {
