@@ -94,17 +94,17 @@ pub const Wrapper = enum {
     }
 
     fn parseGzipHeader(reader: anytype) !void {
-        const magic1 = try reader.read(u8, 0);
-        const magic2 = try reader.read(u8, 0);
-        const method = try reader.read(u8, 0);
-        const flags = try reader.read(u8, 0);
+        const magic1 = try reader.read(u8);
+        const magic2 = try reader.read(u8);
+        const method = try reader.read(u8);
+        const flags = try reader.read(u8);
         try reader.skipBytes(6); // mtime(4), xflags, os
         if (magic1 != 0x1f or magic2 != 0x8b or method != 0x08)
             return error.InvalidGzipHeader;
         // Flags description: https://www.rfc-editor.org/rfc/rfc1952.html#page-5
         if (flags != 0) {
             if (flags & 0b0000_0100 != 0) { // FEXTRA
-                const extra_len = try reader.read(u16, 0);
+                const extra_len = try reader.read(u16);
                 try reader.skipBytes(extra_len);
             }
             if (flags & 0b0000_1000 != 0) { // FNAME
@@ -120,8 +120,8 @@ pub const Wrapper = enum {
     }
 
     fn parseZlibHeader(reader: anytype) !void {
-        const cinfo_cm = try reader.read(u8, 0);
-        _ = try reader.read(u8, 0);
+        const cinfo_cm = try reader.read(u8);
+        _ = try reader.read(u8);
         if (cinfo_cm != 0x78) {
             return error.InvalidZlibHeader;
         }
@@ -130,12 +130,12 @@ pub const Wrapper = enum {
     pub fn parseFooter(comptime wrap: Wrapper, hasher: *Hasher(wrap), reader: anytype) !void {
         switch (wrap) {
             .gzip => {
-                if (try reader.read(u32, 0) != hasher.chksum()) return error.GzipFooterChecksum;
-                if (try reader.read(u32, 0) != hasher.bytesRead()) return error.GzipFooterSize;
+                if (try reader.read(u32) != hasher.chksum()) return error.GzipFooterChecksum;
+                if (try reader.read(u32) != hasher.bytesRead()) return error.GzipFooterSize;
             },
             .zlib => {
                 const chksum: u32 = @byteSwap(hasher.chksum());
-                if (try reader.read(u32, 0) != chksum) return error.ZlibFooterChecksum;
+                if (try reader.read(u32) != chksum) return error.ZlibFooterChecksum;
             },
             .raw => {},
         }

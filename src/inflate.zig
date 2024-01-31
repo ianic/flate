@@ -64,14 +64,14 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
         }
 
         fn blockHeader(self: *Self) !void {
-            self.bfinal = try self.bits.read(u1, 0);
-            self.block_type = try self.bits.read(u2, 0);
+            self.bfinal = try self.bits.read(u1);
+            self.block_type = try self.bits.read(u2);
         }
 
         fn storedBlock(self: *Self) !bool {
             self.bits.alignToByte(); // skip 5 bits (block header is 3 bits)
-            var len = try self.bits.read(u16, 0);
-            const nlen = try self.bits.read(u16, 0);
+            var len = try self.bits.read(u16);
+            const nlen = try self.bits.read(u16);
             if (len != ~nlen) return error.DeflateWrongNlen;
 
             while (len > 0) {
@@ -100,7 +100,7 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
         fn fixedDistanceCode(self: *Self, code: u8) !void {
             try self.bits.fill(5 + 5 + 13);
             const length = try self.decodeLength(code);
-            const distance = try self.decodeDistance(try self.bits.read(u5, F.buffered));
+            const distance = try self.decodeDistance(try self.bits.readF(u5, F.buffered));
             self.win.writeCopy(length, distance);
         }
 
@@ -123,15 +123,15 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
         }
 
         fn dynamicBlockHeader(self: *Self) !void {
-            const hlit: u16 = @as(u16, try self.bits.read(u5, 0)) + 257; // number of ll code entries present - 257
-            const hdist: u16 = @as(u16, try self.bits.read(u5, 0)) + 1; // number of distance code entries - 1
-            const hclen: u8 = @as(u8, try self.bits.read(u4, 0)) + 4; // hclen + 4 code lenths are encoded
+            const hlit: u16 = @as(u16, try self.bits.read(u5)) + 257; // number of ll code entries present - 257
+            const hdist: u16 = @as(u16, try self.bits.read(u5)) + 1; // number of distance code entries - 1
+            const hclen: u8 = @as(u8, try self.bits.read(u4)) + 4; // hclen + 4 code lenths are encoded
 
             // lengths for code lengths
             var cl_l = [_]u4{0} ** 19;
             const order = consts.huffman.codegen_order;
             for (0..hclen) |i| {
-                cl_l[order[i]] = try self.bits.read(u3, 0);
+                cl_l[order[i]] = try self.bits.read(u3);
             }
             self.cl_h.build(&cl_l);
 
@@ -139,7 +139,7 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
             var lit_l = [_]u4{0} ** (286);
             var pos: usize = 0;
             while (pos < hlit) {
-                const sym = self.cl_h.find(try self.bits.read(u7, F.peek | F.reverse));
+                const sym = self.cl_h.find(try self.bits.peekF(u7, F.reverse));
                 self.bits.shift(sym.code_bits);
                 pos += try self.dynamicCodeLength(sym.symbol, &lit_l, pos);
             }
@@ -148,7 +148,7 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
             var dst_l = [_]u4{0} ** (30);
             pos = 0;
             while (pos < hdist) {
-                const sym = self.cl_h.find(try self.bits.read(u7, F.peek | F.reverse));
+                const sym = self.cl_h.find(try self.bits.peekF(u7, F.reverse));
                 self.bits.shift(sym.code_bits);
                 pos += try self.dynamicCodeLength(sym.symbol, &dst_l, pos);
             }
@@ -165,16 +165,16 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
                 16 => {
                     // Copy the previous code length 3 - 6 times.
                     // The next 2 bits indicate repeat length
-                    const n: u8 = @as(u8, try self.bits.read(u2, 0)) + 3;
+                    const n: u8 = @as(u8, try self.bits.read(u2)) + 3;
                     for (0..n) |i| {
                         lens[pos + i] = lens[pos + i - 1];
                     }
                     return n;
                 },
                 // Repeat a code length of 0 for 3 - 10 times. (3 bits of length)
-                17 => return @as(u8, try self.bits.read(u3, 0)) + 3,
+                17 => return @as(u8, try self.bits.read(u3)) + 3,
                 // Repeat a code length of 0 for 11 - 138 times (7 bits of length)
-                18 => return @as(u8, try self.bits.read(u7, 0)) + 11,
+                18 => return @as(u8, try self.bits.read(u7)) + 11,
                 else => {
                     // Represent code lengths of 0 - 15
                     lens[pos] = @intCast(code);
@@ -186,7 +186,7 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
         fn dynamicBlock(self: *Self) !bool {
             while (!self.windowFull()) {
                 try self.bits.fill(15);
-                const sym = self.lit_h.find(try self.bits.read(u15, F.peek | F.buffered | F.reverse));
+                const sym = self.lit_h.find(try self.bits.peekF(u15, F.buffered | F.reverse));
                 self.bits.shift(sym.code_bits);
 
                 if (sym.kind == .literal) {
@@ -202,7 +202,7 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
                 try self.bits.fill(5 + 15 + 13);
                 const length = try self.decodeLength(sym.symbol);
 
-                const dsm = self.dst_h.find(try self.bits.read(u15, F.peek | F.buffered | F.reverse)); // distance symbol
+                const dsm = self.dst_h.find(try self.bits.peekF(u15, F.buffered | F.reverse)); // distance symbol
                 self.bits.shift(dsm.code_bits);
 
                 const distance = try self.decodeDistance(dsm.symbol);
