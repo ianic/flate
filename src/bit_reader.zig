@@ -6,10 +6,11 @@ pub fn bitReader(reader: anytype) BitReader(@TypeOf(reader)) {
     return BitReader(@TypeOf(reader)).init(reader);
 }
 
+/// Bit reader used during inflate.
 pub fn BitReader(comptime ReaderType: type) type {
     return struct {
-        // underlying reader
-        rdr: ReaderType,
+        // Underlying reader used for filling internal bits buffer
+        forward_reader: ReaderType,
         // Internal buffer of 64 bits
         bits: u64 = 0,
         // Number of bits in the buffer
@@ -18,25 +19,25 @@ pub fn BitReader(comptime ReaderType: type) type {
         const Self = @This();
 
         pub fn init(rdr: ReaderType) Self {
-            var self = Self{ .rdr = rdr };
+            var self = Self{ .forward_reader = rdr };
             self.fill(1) catch {};
             return self;
         }
 
         // Try to have `nice` bits are available in buffer. Reads from
-        // underlying reader if there is no `nice` bits in buffer. Returns error
-        // if end of underlying stream is reached and internal buffer is empty.
+        // forward reader if there is no `nice` bits in buffer. Returns error
+        // if end of forward stream is reached and internal buffer is empty.
         // It will not error if less than `nice` bits are in buffer, only when
         // all bits are exhausted. During inflate we usually know what is the
         // maximum bits for the next step but usually that step will need less
         // bits to decode. So `nice` is not hard limit, it will just try to have
-        // that number of bits available. If end of underlying stream is reached
+        // that number of bits available. If end of forward stream is reached
         // it may be some extra zero bits in buffer.
         pub inline fn fill(self: *Self, nice: u6) !void {
             if (self.nbits >= nice) {
                 return; // We have enought bits
             }
-            // Read more bits from underlying reader
+            // Read more bits from forward reader
 
             // Number of empty bytes in bits, round nbits to whole bytes.
             const empty_bytes =
@@ -44,7 +45,7 @@ pub fn BitReader(comptime ReaderType: type) type {
                 (self.nbits >> 3); // 0 for 0-7, 1 for 8-16, ... same as / 8
 
             var buf: [8]u8 = [_]u8{0} ** 8;
-            const bytes_read = self.rdr.read(buf[0..empty_bytes]) catch 0;
+            const bytes_read = self.forward_reader.read(buf[0..empty_bytes]) catch 0;
             if (bytes_read > 0) {
                 const u: u64 = std.mem.readInt(u64, buf[0..8], .little);
                 self.bits |= u << @as(u6, @intCast(self.nbits));
@@ -67,8 +68,8 @@ pub fn BitReader(comptime ReaderType: type) type {
                 buf[n] = try self.readF(u8, flag.buffered);
                 n += 1;
             }
-            // Then use underlying reader for all other bytes.
-            try self.rdr.readNoEof(buf[n..]);
+            // Then use forward reader for all other bytes.
+            try self.forward_reader.readNoEof(buf[n..]);
         }
 
         pub const flag = struct {
