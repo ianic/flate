@@ -57,22 +57,10 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
             return .{ .bits = BitReaderType.init(rt) };
         }
 
-        inline fn decodeLength(self: *Self, code: u8) !u16 {
-            assert(code <= 28);
-            const ml = Token.matchLength(code);
-            return if (ml.extra_bits == 0) // 0 - 5 extra bits
-                ml.base
-            else
-                ml.base + try self.bits.readN(ml.extra_bits, F.buffered);
-        }
-
-        inline fn decodeDistance(self: *Self, code: u8) !u16 {
-            assert(code <= 29);
-            const mo = Token.matchOffset(code);
-            return if (mo.extra_bits == 0) // 0 - 13 extra bits
-                mo.base
-            else
-                mo.base + try self.bits.readN(mo.extra_bits, F.buffered);
+        inline fn windowFull(self: *Self) bool {
+            // 258 is largest back reference length.
+            // That much bytes can be produced in single step.
+            return self.win.free() < 258 + 1;
         }
 
         fn blockHeader(self: *Self) !void {
@@ -92,12 +80,6 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
                 len -= @intCast(buf.len);
             }
             return true;
-        }
-
-        inline fn windowFull(self: *Self) bool {
-            // 258 is largest back reference length.
-            // That much bytes can be produced in single step.
-            return self.win.free() < 258 + 1;
         }
 
         fn fixedBlock(self: *Self) !bool {
@@ -120,6 +102,24 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
             const length = try self.decodeLength(code);
             const distance = try self.decodeDistance(try self.bits.read(u5, F.buffered));
             self.win.writeCopy(length, distance);
+        }
+
+        inline fn decodeLength(self: *Self, code: u8) !u16 {
+            assert(code <= 28);
+            const ml = Token.matchLength(code);
+            return if (ml.extra_bits == 0) // 0 - 5 extra bits
+                ml.base
+            else
+                ml.base + try self.bits.readN(ml.extra_bits, F.buffered);
+        }
+
+        inline fn decodeDistance(self: *Self, code: u8) !u16 {
+            assert(code <= 29);
+            const mo = Token.matchOffset(code);
+            return if (mo.extra_bits == 0) // 0 - 13 extra bits
+                mo.base
+            else
+                mo.base + try self.bits.readN(mo.extra_bits, F.buffered);
         }
 
         fn dynamicBlockHeader(self: *Self) !void {
@@ -157,6 +157,32 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
             self.dst_h.build(&dst_l);
         }
 
+        // Decode code length symbol to code length.
+        // Returns number of postitions advanced.
+        fn dynamicCodeLength(self: *Self, code: u16, lens: []u4, pos: usize) !usize {
+            assert(code <= 18);
+            switch (code) {
+                16 => {
+                    // Copy the previous code length 3 - 6 times.
+                    // The next 2 bits indicate repeat length
+                    const n: u8 = @as(u8, try self.bits.read(u2, 0)) + 3;
+                    for (0..n) |i| {
+                        lens[pos + i] = lens[pos + i - 1];
+                    }
+                    return n;
+                },
+                // Repeat a code length of 0 for 3 - 10 times. (3 bits of length)
+                17 => return @as(u8, try self.bits.read(u3, 0)) + 3,
+                // Repeat a code length of 0 for 11 - 138 times (7 bits of length)
+                18 => return @as(u8, try self.bits.read(u7, 0)) + 11,
+                else => {
+                    // Represent code lengths of 0 - 15
+                    lens[pos] = @intCast(code);
+                    return 1;
+                },
+            }
+        }
+
         fn dynamicBlock(self: *Self) !bool {
             while (!self.windowFull()) {
                 try self.bits.fill(15);
@@ -183,32 +209,6 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
                 self.win.writeCopy(length, distance);
             }
             return false;
-        }
-
-        // Decode code length symbol to code length.
-        // Returns number of postitions advanced.
-        fn dynamicCodeLength(self: *Self, code: u16, lens: []u4, pos: usize) !usize {
-            assert(code <= 18);
-            switch (code) {
-                16 => {
-                    // Copy the previous code length 3 - 6 times.
-                    // The next 2 bits indicate repeat length
-                    const n: u8 = @as(u8, try self.bits.read(u2, 0)) + 3;
-                    for (0..n) |i| {
-                        lens[pos + i] = lens[pos + i - 1];
-                    }
-                    return n;
-                },
-                // Repeat a code length of 0 for 3 - 10 times. (3 bits of length)
-                17 => return @as(u8, try self.bits.read(u3, 0)) + 3,
-                // Repeat a code length of 0 for 11 - 138 times (7 bits of length)
-                18 => return @as(u8, try self.bits.read(u7, 0)) + 11,
-                else => {
-                    // Represent code lengths of 0 - 15
-                    lens[pos] = @intCast(code);
-                    return 1;
-                },
-            }
         }
 
         fn step(self: *Self) Error!void {
