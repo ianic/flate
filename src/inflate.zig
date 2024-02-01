@@ -20,10 +20,6 @@ pub fn decompressor(comptime wrap: Wrapper, reader: anytype) Inflate(wrap, @Type
     return Inflate(wrap, @TypeOf(reader)).init(reader);
 }
 
-/// Allocates 196K of internal buffers:
-///   - 64K for sliding window
-///   - 2 * 32K of u16 for huffman codes
-///
 pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
     const BitReaderType = BitReader(ReaderType);
     const F = BitReaderType.flag;
@@ -36,7 +32,6 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
         // dynamic block huffman codes
         lit_h: hfd.LiteralDecoder = .{}, // literals
         dst_h: hfd.DistanceDecoder = .{}, // distances
-        cl_h: hfd.CodegenDecoder = .{}, // code lengths
 
         // current read state
         bfinal: u1 = 0,
@@ -132,13 +127,14 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
             for (0..hclen) |i| {
                 cl_l[codegen_order[i]] = try self.bits.read(u3);
             }
-            self.cl_h.build(&cl_l);
+            var cl_h: hfd.CodegenDecoder = .{};
+            cl_h.build(&cl_l);
 
             // literal code lengths
             var lit_l = [_]u4{0} ** (286);
             var pos: usize = 0;
             while (pos < hlit) {
-                const sym = self.cl_h.find(try self.bits.peekF(u7, F.reverse));
+                const sym = cl_h.find(try self.bits.peekF(u7, F.reverse));
                 self.bits.shift(sym.code_bits);
                 pos += try self.dynamicCodeLength(sym.symbol, &lit_l, pos);
             }
@@ -147,7 +143,7 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
             var dst_l = [_]u4{0} ** (30);
             pos = 0;
             while (pos < hdist) {
-                const sym = self.cl_h.find(try self.bits.peekF(u7, F.reverse));
+                const sym = cl_h.find(try self.bits.peekF(u7, F.reverse));
                 self.bits.shift(sym.code_bits);
                 pos += try self.dynamicCodeLength(sym.symbol, &dst_l, pos);
             }
@@ -299,6 +295,26 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
             return .{ .context = self };
         }
     };
+}
+
+// Allocates ~200K of internal buffers, most important are:
+//   - 64K for sliding window
+//   - 64K (2 * 32K of u16) for huffman codes
+test "Struct sizes" {
+    var fbs = std.io.fixedBufferStream("");
+    const ReaderType = @TypeOf(fbs.reader());
+    const inflate_size = @sizeOf(Inflate(.gzip, ReaderType));
+
+    try testing.expectEqual(199352, inflate_size);
+    try testing.expectEqual(
+        @sizeOf(SlidingWindow) + @sizeOf(hfd.LiteralDecoder) + @sizeOf(hfd.DistanceDecoder) + 48,
+        inflate_size,
+    );
+    try testing.expectEqual(65536 + 8 + 8, @sizeOf(SlidingWindow));
+    try testing.expectEqual(8, @sizeOf(Wrapper.raw.Hasher()));
+    try testing.expectEqual(24, @sizeOf(BitReader(ReaderType)));
+    try testing.expectEqual(67132, @sizeOf(hfd.LiteralDecoder));
+    try testing.expectEqual(66620, @sizeOf(hfd.DistanceDecoder));
 }
 
 test "flate decompress" {
