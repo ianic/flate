@@ -1,3 +1,5 @@
+const std = @import("std");
+
 pub fn BitWriter(comptime WriterType: type) type {
     // buffer_flush_size indicates the buffer size
     // after which bytes are flushed to the writer.
@@ -56,25 +58,19 @@ pub fn BitWriter(comptime WriterType: type) type {
         pub inline fn writeBits(self: *Self, b: u32, nb: u32) Error!void {
             self.bits |= @as(u64, @intCast(b)) << @as(u6, @intCast(self.nbits));
             self.nbits += nb;
-            if (self.nbits >= 48) {
-                const bits = self.bits;
-                self.bits >>= 48;
-                self.nbits -= 48;
-                var n = self.nbytes;
-                var bytes = self.bytes[n..][0..6];
-                bytes[0] = @as(u8, @truncate(bits));
-                bytes[1] = @as(u8, @truncate(bits >> 8));
-                bytes[2] = @as(u8, @truncate(bits >> 16));
-                bytes[3] = @as(u8, @truncate(bits >> 24));
-                bytes[4] = @as(u8, @truncate(bits >> 32));
-                bytes[5] = @as(u8, @truncate(bits >> 40));
-                n += 6;
-                if (n >= buffer_flush_size) {
-                    _ = try self.inner_writer.write(self.bytes[0..n]);
-                    n = 0;
-                }
-                self.nbytes = n;
+            if (self.nbits < 48)
+                return;
+
+            var n = self.nbytes;
+            std.mem.writeInt(u64, self.bytes[n..][0..8], self.bits, .little);
+            n += 6;
+            if (n >= buffer_flush_size) {
+                _ = try self.inner_writer.write(self.bytes[0..n]);
+                n = 0;
             }
+            self.nbytes = n;
+            self.bits >>= 48;
+            self.nbits -= 48;
         }
 
         pub fn writeBytes(self: *Self, bytes: []const u8) Error!void {
