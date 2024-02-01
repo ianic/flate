@@ -174,7 +174,7 @@ pub const Kind = enum(u1) {
     match,
 };
 
-// distance range 1 - 32768, stored in dist as 0 - 32767 (u16)
+// distance range 1 - 32768, stored in dist as 0 - 32767 (u15)
 dist: u15 = 0,
 // length range 3 - 258, stored in len_lit as 0 - 255 (u8)
 len_lit: u8 = 0,
@@ -196,7 +196,7 @@ pub fn initLiteral(lit: u8) Token {
     return .{ .kind = .literal, .len_lit = lit };
 }
 
-// distance range 1 - 32768, stored in dist as 0 - 32767 (u16)
+// distance range 1 - 32768, stored in dist as 0 - 32767 (u15)
 // length range 3 - 258, stored in len_lit as 0 - 255 (u8)
 pub fn initMatch(dist: u16, len: u16) Token {
     assert(len >= consts.min_length and len <= consts.max_length);

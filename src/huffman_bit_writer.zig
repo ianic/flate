@@ -516,11 +516,6 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
         // Encodes a block of bytes as either Huffman encoded literals or uncompressed bytes
         // if the results only gains very little from compression.
         pub fn writeBlockHuff(self: *Self, eof: bool, input: []const u8) Error!void {
-            // Clear histogram
-            for (self.literal_freq, 0..) |_, i| {
-                self.literal_freq[i] = 0;
-            }
-
             // Add everything as literals
             histogram(input, &self.literal_freq);
 
@@ -571,9 +566,12 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
         }
 
         // histogram accumulates a histogram of b in h.
-        //
-        // h.len must be >= 256, and h's elements must be all zeroes.
         fn histogram(b: []const u8, h: *[286]u16) void {
+            // Clear histogram
+            for (h, 0..) |_, i| {
+                h[i] = 0;
+            }
+
             var lh = h.*[0..256];
             for (b) |t| {
                 lh[t] += 1;
