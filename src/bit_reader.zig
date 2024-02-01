@@ -14,7 +14,7 @@ pub fn BitReader(comptime ReaderType: type) type {
         // Internal buffer of 64 bits
         bits: u64 = 0,
         // Number of bits in the buffer
-        nbits: u8 = 0,
+        nbits: u32 = 0,
 
         const Self = @This();
 
