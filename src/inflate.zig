@@ -180,30 +180,35 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
 
         fn dynamicBlock(self: *Self) !bool {
             while (!self.windowFull()) {
-                try self.bits.fill(15);
-                const sym = self.lit_h.find(try self.bits.peekF(u15, F.buffered | F.reverse));
-                self.bits.shift(sym.code_bits);
+                try self.bits.fill(15); // optimization so other bit reads can be buffered (avoiding one in hot path)
+                const sym = try self.decodeSymbol(&self.lit_h);
 
                 if (sym.kind == .literal) {
                     self.win.write(sym.symbol);
                     continue;
                 }
                 if (sym.kind == .end_of_block) {
-                    // end of block
                     return true;
                 }
 
-                // decode backward pointer <length, distance>
-                try self.bits.fill(5 + 15 + 13);
+                // Decode match backreference <length, distance>
+                try self.bits.fill(5 + 15 + 13); // so we can use buffered reads
                 const length = try self.decodeLength(sym.symbol);
-
-                const dsm = self.dst_h.find(try self.bits.peekF(u15, F.buffered | F.reverse)); // distance symbol
-                self.bits.shift(dsm.code_bits);
-
+                const dsm = try self.decodeSymbol(&self.dst_h);
                 const distance = try self.decodeDistance(dsm.symbol);
                 self.win.writeCopy(length, distance);
             }
             return false;
+        }
+
+        // Peek 15 bits from bits reader (maximum code len is 15 bits). Use
+        // decoder to find symbol for that code. We then know how many bits is
+        // used. Shift bit reader for that much bits, those bits are used. And
+        // return symbol.
+        inline fn decodeSymbol(self: *Self, decoder: anytype) !hfd.Symbol {
+            const sym = decoder.find(try self.bits.peekF(u15, F.buffered | F.reverse));
+            self.bits.shift(sym.code_bits);
+            return sym;
         }
 
         fn step(self: *Self) Error!void {

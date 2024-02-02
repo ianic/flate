@@ -35,7 +35,7 @@ const match_lengths_index = [_]u8{
 const MatchLength = struct {
     code: u16,
     base_scaled: u8, // base - 3, scaled to fit into u8 (0-255), same as lit_len field in Token.
-    base: u16, // 3-358
+    base: u16, // 3-258
     extra_length: u8 = 0,
     extra_bits: u4,
 };
