@@ -152,11 +152,17 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
             self.dst_h.build(&dst_l);
         }
 
-        // Decode code length symbol to code length.
-        // Returns number of postitions advanced.
+        // Decode code length symbol to code length. Writes decoded lendth into
+        // lens slice starting at position pos. Returns number of postitions
+        // advanced.
         fn dynamicCodeLength(self: *Self, code: u16, lens: []u4, pos: usize) !usize {
             assert(code <= 18);
             switch (code) {
+                0...15 => {
+                    // Represent code lengths of 0 - 15
+                    lens[pos] = @intCast(code);
+                    return 1;
+                },
                 16 => {
                     // Copy the previous code length 3 - 6 times.
                     // The next 2 bits indicate repeat length
@@ -170,33 +176,26 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
                 17 => return @as(u8, try self.bits.read(u3)) + 3,
                 // Repeat a code length of 0 for 11 - 138 times (7 bits of length)
                 18 => return @as(u8, try self.bits.read(u7)) + 11,
-                else => {
-                    // Represent code lengths of 0 - 15
-                    lens[pos] = @intCast(code);
-                    return 1;
-                },
+                else => unreachable,
             }
         }
 
         fn dynamicBlock(self: *Self) !bool {
             while (!self.windowFull()) {
-                try self.bits.fill(15); // optimization so other bit reads can be buffered (avoiding one in hot path)
+                try self.bits.fill(15); // optimization so other bit reads can be buffered (avoiding one `if` in hot path)
                 const sym = try self.decodeSymbol(&self.lit_h);
 
-                if (sym.kind == .literal) {
-                    self.win.write(sym.symbol);
-                    continue;
+                switch (sym.kind) {
+                    .literal => self.win.write(sym.symbol),
+                    .match => { // Decode match backreference <length, distance>
+                        try self.bits.fill(5 + 15 + 13); // so we can use buffered reads
+                        const length = try self.decodeLength(sym.symbol);
+                        const dsm = try self.decodeSymbol(&self.dst_h);
+                        const distance = try self.decodeDistance(dsm.symbol);
+                        self.win.writeCopy(length, distance);
+                    },
+                    .end_of_block => return true,
                 }
-                if (sym.kind == .end_of_block) {
-                    return true;
-                }
-
-                // Decode match backreference <length, distance>
-                try self.bits.fill(5 + 15 + 13); // so we can use buffered reads
-                const length = try self.decodeLength(sym.symbol);
-                const dsm = try self.decodeSymbol(&self.dst_h);
-                const distance = try self.decodeDistance(dsm.symbol);
-                self.win.writeCopy(length, distance);
             }
             return false;
         }
