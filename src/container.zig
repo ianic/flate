@@ -1,15 +1,15 @@
 const std = @import("std");
 
-pub const Wrapper = enum {
+pub const Container = enum {
     raw, // no header or footer
     gzip, // gzip header and footer
     zlib, // zlib header and footer
 
-    pub fn size(w: Wrapper) usize {
+    pub fn size(w: Container) usize {
         return headerSize(w) + footerSize(w);
     }
 
-    pub fn headerSize(w: Wrapper) usize {
+    pub fn headerSize(w: Container) usize {
         return switch (w) {
             .gzip => 10,
             .zlib => 2,
@@ -17,7 +17,7 @@ pub const Wrapper = enum {
         };
     }
 
-    pub fn footerSize(w: Wrapper) usize {
+    pub fn footerSize(w: Container) usize {
         return switch (w) {
             .gzip => 8,
             .zlib => 4,
@@ -25,7 +25,7 @@ pub const Wrapper = enum {
         };
     }
 
-    pub const list = [_]Wrapper{ .raw, .gzip, .zlib };
+    pub const list = [_]Container{ .raw, .gzip, .zlib };
 
     pub const Error = error{
         GzipHeader,
@@ -33,10 +33,9 @@ pub const Wrapper = enum {
         GzipFooterChecksum,
         GzipFooterSize,
         ZlibFooterChecksum,
-        EndOfStream,
     };
 
-    pub fn writeHeader(comptime wrap: Wrapper, writer: anytype) Error!void {
+    pub fn writeHeader(comptime wrap: Container, writer: anytype) !void {
         switch (wrap) {
             .gzip => {
                 // GZIP 10 byte header (https://datatracker.ietf.org/doc/html/rfc1952#page-5):
@@ -68,7 +67,7 @@ pub const Wrapper = enum {
         }
     }
 
-    pub fn writeFooter(comptime wrap: Wrapper, hasher: *Hasher(wrap), writer: anytype) Error!void {
+    pub fn writeFooter(comptime wrap: Container, hasher: *Hasher(wrap), writer: anytype) !void {
         var bits: [4]u8 = undefined;
         switch (wrap) {
             .gzip => {
@@ -94,7 +93,7 @@ pub const Wrapper = enum {
         }
     }
 
-    pub fn parseHeader(comptime wrap: Wrapper, reader: anytype) Error!void {
+    pub fn parseHeader(comptime wrap: Container, reader: anytype) !void {
         switch (wrap) {
             .gzip => try parseGzipHeader(reader),
             .zlib => try parseZlibHeader(reader),
@@ -102,7 +101,7 @@ pub const Wrapper = enum {
         }
     }
 
-    fn parseGzipHeader(reader: anytype) Error!void {
+    fn parseGzipHeader(reader: anytype) !void {
         const magic1 = try reader.read(u8);
         const magic2 = try reader.read(u8);
         const method = try reader.read(u8);
@@ -128,7 +127,7 @@ pub const Wrapper = enum {
         }
     }
 
-    fn parseZlibHeader(reader: anytype) Error!void {
+    fn parseZlibHeader(reader: anytype) !void {
         const cinfo_cm = try reader.read(u8);
         _ = try reader.read(u8);
         if (cinfo_cm != 0x78) {
@@ -136,7 +135,7 @@ pub const Wrapper = enum {
         }
     }
 
-    pub fn parseFooter(comptime wrap: Wrapper, hasher: *Hasher(wrap), reader: anytype) Error!void {
+    pub fn parseFooter(comptime wrap: Container, hasher: *Hasher(wrap), reader: anytype) !void {
         switch (wrap) {
             .gzip => {
                 if (try reader.read(u32) != hasher.chksum()) return error.GzipFooterChecksum;
@@ -150,7 +149,7 @@ pub const Wrapper = enum {
         }
     }
 
-    pub fn Hasher(comptime wrap: Wrapper) type {
+    pub fn Hasher(comptime wrap: Container) type {
         const HasherType = switch (wrap) {
             .gzip => std.hash.Crc32,
             .zlib => std.hash.Adler32,

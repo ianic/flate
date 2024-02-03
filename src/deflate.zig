@@ -8,7 +8,7 @@ const print = std.debug.print;
 const Token = @import("Token.zig");
 const consts = @import("consts.zig");
 const hbw = @import("huffman_bit_writer.zig");
-const Wrapper = @import("wrapper.zig").Wrapper;
+const Container = @import("container.zig").Container;
 
 pub const Level = enum(u4) {
     // zig fmt: off
@@ -41,20 +41,20 @@ const LevelArgs = struct {
     }
 };
 
-pub fn compress(comptime wrap: Wrapper, reader: anytype, writer: anytype, level: Level) !void {
-    var df = try compressor(wrap, writer, level);
+pub fn compress(comptime container: Container, reader: anytype, writer: anytype, level: Level) !void {
+    var df = try compressor(container, writer, level);
     try df.stream(reader);
     try df.close();
 }
 
-pub fn compressor(comptime wrap: Wrapper, writer: anytype, level: Level) !Deflate(
-    wrap,
+pub fn compressor(comptime container: Container, writer: anytype, level: Level) !Deflate(
+    container,
     @TypeOf(writer),
     hbw.HuffmanBitWriter(@TypeOf(writer)),
 ) {
     const WriterType = @TypeOf(writer);
     const TokenWriter = hbw.HuffmanBitWriter(WriterType);
-    return try Deflate(wrap, WriterType, TokenWriter).init(writer, level);
+    return try Deflate(container, WriterType, TokenWriter).init(writer, level);
 }
 
 // Default compression algorithm. Has two steps: tokenization and token
@@ -70,11 +70,11 @@ pub fn compressor(comptime wrap: Wrapper, writer: anytype, level: Level) !Deflat
 // dynamic) and encode tokens to the output byte stream.   Client has to call
 // `close` to write block with the final bit set.
 //
-// Wrapper defines type of header and footer which can be gzip, zlib or raw.
+// Container defines type of header and footer which can be gzip, zlib or raw.
 // They all share same deflate body. Raw has no header or footer just deflate
 // body.
 //
-fn Deflate(comptime wrap: Wrapper, comptime WriterType: type, comptime TokenWriter: type) type {
+fn Deflate(comptime container: Container, comptime WriterType: type, comptime TokenWriter: type) type {
     return struct {
         lookup: Lookup = .{},
         win: Window = .{},
@@ -82,7 +82,7 @@ fn Deflate(comptime wrap: Wrapper, comptime WriterType: type, comptime TokenWrit
         wrt: WriterType,
         token_writer: TokenWriter,
         level: LevelArgs,
-        hasher: wrap.Hasher() = .{},
+        hasher: container.Hasher() = .{},
 
         // Match and literal at the previous position.
         // Used for lazy match finding in processWindow.
@@ -289,38 +289,38 @@ fn Deflate(comptime wrap: Wrapper, comptime WriterType: type, comptime TokenWrit
 
         // header and footer
         fn writeHeader(self: *Self) !void {
-            try wrap.writeHeader(self.wrt);
+            try container.writeHeader(self.wrt);
         }
 
         fn writeFooter(self: *Self) !void {
-            try wrap.writeFooter(&self.hasher, self.wrt);
+            try container.writeFooter(&self.hasher, self.wrt);
         }
     };
 }
 
-pub fn compressHuffmanOnly(comptime wrap: Wrapper, reader: anytype, writer: anytype) !void {
-    var df = try huffmanOnlyCompressor(wrap, writer);
+pub fn compressHuffmanOnly(comptime container: Container, reader: anytype, writer: anytype) !void {
+    var df = try huffmanOnlyCompressor(container, writer);
     try df.stream(reader);
     try df.close();
 }
 
-pub fn huffmanOnlyCompressor(comptime wrap: Wrapper, writer: anytype) !DeflateHuffmanOnly(
-    wrap,
+pub fn huffmanOnlyCompressor(comptime container: Container, writer: anytype) !DeflateHuffmanOnly(
+    container,
     @TypeOf(writer),
     hbw.HuffmanBitWriter(@TypeOf(writer)),
 ) {
     const WriterType = @TypeOf(writer);
     const TokenWriter = hbw.HuffmanBitWriter(WriterType);
-    return try DeflateHuffmanOnly(wrap, WriterType, TokenWriter).init(writer);
+    return try DeflateHuffmanOnly(container, WriterType, TokenWriter).init(writer);
 }
 
 // Creates huffman only deflate blocks. Without LZ77 compression, without
 // finding matches in the history.
-fn DeflateHuffmanOnly(comptime wrap: Wrapper, comptime WriterType: type, comptime TokenWriter: type) type {
+fn DeflateHuffmanOnly(comptime container: Container, comptime WriterType: type, comptime TokenWriter: type) type {
     return struct {
         wrt: WriterType,
         token_writer: TokenWriter,
-        hasher: wrap.Hasher() = .{},
+        hasher: container.Hasher() = .{},
 
         const Self = @This();
 
@@ -369,11 +369,11 @@ fn DeflateHuffmanOnly(comptime wrap: Wrapper, comptime WriterType: type, comptim
 
         // header and footer
         fn writeHeader(self: *Self) !void {
-            try wrap.writeHeader(self.wrt);
+            try container.writeHeader(self.wrt);
         }
 
         fn writeFooter(self: *Self) !void {
-            try wrap.writeFooter(&self.hasher, self.wrt);
+            try container.writeFooter(&self.hasher, self.wrt);
         }
     };
 }
@@ -400,10 +400,10 @@ test "deflate: tokenization" {
     };
 
     for (cases) |c| {
-        inline for (Wrapper.list) |wrap| { // for each wrapping
+        inline for (Container.list) |container| { // for each wrapping
             var cw = io.countingWriter(io.null_writer);
             const cww = cw.writer();
-            var df = try Deflate(wrap, @TypeOf(cww), TestTokenWriter).init(cww, .default);
+            var df = try Deflate(container, @TypeOf(cww), TestTokenWriter).init(cww, .default);
 
             _ = try df.write(c.data);
             try df.flush();
@@ -412,9 +412,9 @@ test "deflate: tokenization" {
             try expect(df.token_writer.pos == c.tokens.len); // number of tokens written
             try testing.expectEqualSlices(Token, df.token_writer.get(), c.tokens); // tokens match
 
-            try testing.expectEqual(wrap.headerSize(), cw.bytes_written);
+            try testing.expectEqual(container.headerSize(), cw.bytes_written);
             try df.close();
-            try testing.expectEqual(wrap.size(), cw.bytes_written);
+            try testing.expectEqual(container.size(), cw.bytes_written);
         }
     }
 }

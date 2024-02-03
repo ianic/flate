@@ -5,20 +5,20 @@ const testing = std.testing;
 const hfd = @import("huffman_decoder.zig");
 const BitReader = @import("bit_reader.zig").BitReader;
 const SlidingWindow = @import("sliding_window.zig").SlidingWindow;
-const Wrapper = @import("wrapper.zig").Wrapper;
+const Container = @import("container.zig").Container;
 const Token = @import("Token.zig");
 const codegen_order = @import("consts.zig").huffman.codegen_order;
 
-pub fn decompress(comptime wrap: Wrapper, input_reader: anytype, output_writer: anytype) !void {
-    var inf = inflate(wrap, input_reader);
+pub fn decompress(comptime container: Container, input_reader: anytype, output_writer: anytype) !void {
+    var inf = inflate(container, input_reader);
     try inf.decompress(input_reader, output_writer);
 }
 
-pub fn inflate(comptime wrap: Wrapper, reader: anytype) Inflate(wrap, @TypeOf(reader)) {
-    return Inflate(wrap, @TypeOf(reader)).init(reader);
+pub fn inflate(comptime container: Container, reader: anytype) Inflate(container, @TypeOf(reader)) {
+    return Inflate(container, @TypeOf(reader)).init(reader);
 }
 
-pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
+pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
     return struct {
         const BitReaderType = BitReader(ReaderType);
         const F = BitReaderType.flag;
@@ -26,7 +26,7 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
         bits: BitReaderType = .{},
         win: SlidingWindow = .{},
         // Hashes, produces checkusm, of uncompressed data for gzip/zlib footer.
-        hasher: wrap.Hasher() = .{},
+        hasher: container.Hasher() = .{},
 
         // dynamic block huffman code decoders
         lit_h: hfd.LiteralDecoder = .{}, // literals
@@ -47,7 +47,7 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
 
         const Self = @This();
 
-        pub const Error = ReaderType.Error || Wrapper.Error || error{
+        pub const Error = ReaderType.Error || Container.Error || error{
             EndOfStream,
             DeflateInvalidCode,
             DeflateInvalidBlockType,
@@ -64,12 +64,12 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
             return self.win.free() < 258 + 1;
         }
 
-        fn blockHeader(self: *Self) Error!void {
+        fn blockHeader(self: *Self) !void {
             self.bfinal = try self.bits.read(u1);
             self.block_type = try self.bits.read(u2);
         }
 
-        fn storedBlock(self: *Self) Error!bool {
+        fn storedBlock(self: *Self) !bool {
             self.bits.alignToByte(); // skip 5 bits padding (block header is 3 bits)
             var len = try self.bits.read(u16);
             const nlen = try self.bits.read(u16);
@@ -83,7 +83,7 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
             return true;
         }
 
-        fn fixedBlock(self: *Self) Error!bool {
+        fn fixedBlock(self: *Self) !bool {
             while (!self.windowFull()) {
                 const code = try self.bits.readFixedCode();
                 switch (code) {
@@ -98,14 +98,14 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
 
         // Handles fixed block non literal (length) code.
         // Length code is followed by 5 bits of distance code.
-        fn fixedDistanceCode(self: *Self, code: u8) Error!void {
+        fn fixedDistanceCode(self: *Self, code: u8) !void {
             try self.bits.fill(5 + 5 + 13);
             const length = try self.decodeLength(code);
             const distance = try self.decodeDistance(try self.bits.readF(u5, F.buffered));
             self.win.writeCopy(length, distance);
         }
 
-        inline fn decodeLength(self: *Self, code: u8) Error!u16 {
+        inline fn decodeLength(self: *Self, code: u8) !u16 {
             assert(code <= 28);
             const ml = Token.matchLength(code);
             return if (ml.extra_bits == 0) // 0 - 5 extra bits
@@ -114,7 +114,7 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
                 ml.base + try self.bits.readN(ml.extra_bits, F.buffered);
         }
 
-        inline fn decodeDistance(self: *Self, code: u8) Error!u16 {
+        inline fn decodeDistance(self: *Self, code: u8) !u16 {
             assert(code <= 29);
             const md = Token.matchDistance(code);
             return if (md.extra_bits == 0) // 0 - 13 extra bits
@@ -123,7 +123,7 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
                 md.base + try self.bits.readN(md.extra_bits, F.buffered);
         }
 
-        fn dynamicBlockHeader(self: *Self) Error!void {
+        fn dynamicBlockHeader(self: *Self) !void {
             const hlit: u16 = @as(u16, try self.bits.read(u5)) + 257; // number of ll code entries present - 257
             const hdist: u16 = @as(u16, try self.bits.read(u5)) + 1; // number of distance code entries - 1
             const hclen: u8 = @as(u8, try self.bits.read(u4)) + 4; // hclen + 4 code lenths are encoded
@@ -161,7 +161,7 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
         // Decode code length symbol to code length. Writes decoded lendth into
         // lens slice starting at position pos. Returns number of postitions
         // advanced.
-        fn dynamicCodeLength(self: *Self, code: u16, lens: []u4, pos: usize) Error!usize {
+        fn dynamicCodeLength(self: *Self, code: u16, lens: []u4, pos: usize) !usize {
             assert(code <= 18);
             switch (code) {
                 0...15 => {
@@ -186,7 +186,7 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
             }
         }
 
-        fn dynamicBlock(self: *Self) Error!bool {
+        fn dynamicBlock(self: *Self) !bool {
             while (!self.windowFull()) {
                 try self.bits.fill(15); // optimization so other bit reads can be buffered (avoiding one `if` in hot path)
                 const sym = try self.decodeSymbol(&self.lit_h);
@@ -210,13 +210,13 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
         // decoder to find symbol for that code. We then know how many bits is
         // used. Shift bit reader for that much bits, those bits are used. And
         // return symbol.
-        inline fn decodeSymbol(self: *Self, decoder: anytype) Error!hfd.Symbol {
+        inline fn decodeSymbol(self: *Self, decoder: anytype) !hfd.Symbol {
             const sym = decoder.find(try self.bits.peekF(u15, F.buffered | F.reverse));
             self.bits.shift(sym.code_bits);
             return sym;
         }
 
-        fn step(self: *Self) Error!void {
+        fn step(self: *Self) !void {
             switch (self.state) {
                 .protocol_header => {
                     try self.parseHeader();
@@ -247,12 +247,12 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
             }
         }
 
-        fn parseHeader(self: *Self) Error!void {
-            try wrap.parseHeader(&self.bits);
+        fn parseHeader(self: *Self) !void {
+            try container.parseHeader(&self.bits);
         }
 
-        fn parseFooter(self: *Self) Error!void {
-            try wrap.parseFooter(&self.hasher, &self.bits);
+        fn parseFooter(self: *Self) !void {
+            try container.parseFooter(&self.hasher, &self.bits);
         }
 
         /// Replaces the inner reader with new reader.
@@ -334,7 +334,7 @@ test "Struct sizes" {
         inflate_size,
     );
     try testing.expectEqual(65536 + 8 + 8, @sizeOf(SlidingWindow));
-    try testing.expectEqual(8, @sizeOf(Wrapper.raw.Hasher()));
+    try testing.expectEqual(8, @sizeOf(Container.raw.Hasher()));
     try testing.expectEqual(24, @sizeOf(BitReader(ReaderType)));
     try testing.expectEqual(67132, @sizeOf(hfd.LiteralDecoder));
     try testing.expectEqual(66620, @sizeOf(hfd.DistanceDecoder));

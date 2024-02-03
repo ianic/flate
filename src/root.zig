@@ -154,7 +154,7 @@ test "decompress" {
 }
 
 test "compress/decompress" {
-    const Wrapper = @import("wrapper.zig").Wrapper;
+    const Container = @import("container.zig").Container;
     const fixedBufferStream = std.io.fixedBufferStream;
 
     var cmp_buf: [32 * 1024]u8 = undefined; // compressed data buffer
@@ -192,15 +192,15 @@ test "compress/decompress" {
         for (levels, 0..) |level, i| { // for each compression level
             const gzip_size = case.gzip_sizes[i];
 
-            inline for (Wrapper.list) |wrap| { // for each wrapping
-                const compressed_size = gzip_size - Wrapper.gzip.size() + wrap.size();
+            inline for (Container.list) |container| { // for each wrapping
+                const compressed_size = gzip_size - Container.gzip.size() + container.size();
 
                 // compress original stream to compressed stream
                 {
                     var original = fixedBufferStream(data);
                     var compressed = fixedBufferStream(&cmp_buf);
 
-                    try deflate.compress(wrap, original.reader(), compressed.writer(), level);
+                    try deflate.compress(container, original.reader(), compressed.writer(), level);
 
                     try testing.expectEqual(compressed_size, compressed.pos);
                 }
@@ -209,7 +209,7 @@ test "compress/decompress" {
                     var compressed = fixedBufferStream(cmp_buf[0..compressed_size]);
                     var decompressed = fixedBufferStream(&dcm_buf);
 
-                    try inflate.decompress(wrap, compressed.reader(), decompressed.writer());
+                    try inflate.decompress(container, compressed.reader(), decompressed.writer());
 
                     try testing.expectEqualSlices(u8, data, decompressed.getWritten());
                 }
@@ -218,7 +218,7 @@ test "compress/decompress" {
                 {
                     var compressed = fixedBufferStream(&cmp_buf);
 
-                    var cmp = try deflate.compressor(wrap, compressed.writer(), level);
+                    var cmp = try deflate.compressor(container, compressed.writer(), level);
                     var cmp_wrt = cmp.writer();
                     try cmp_wrt.writeAll(data);
                     try cmp.close();
@@ -229,7 +229,7 @@ test "compress/decompress" {
                 {
                     var compressed = fixedBufferStream(cmp_buf[0..compressed_size]);
 
-                    var dcm = inflate.inflate(wrap, compressed.reader());
+                    var dcm = inflate.inflate(container, compressed.reader());
                     var dcm_rdr = dcm.reader();
                     const n = try dcm_rdr.readAll(&dcm_buf);
 
@@ -242,8 +242,8 @@ test "compress/decompress" {
         {
             const gzip_size = case.huffman_only_size;
 
-            inline for (Wrapper.list) |wrap| { // for each wrapping
-                const compressed_size = gzip_size - Wrapper.gzip.size() + wrap.size();
+            inline for (Container.list) |wrap| { // for each wrapping
+                const compressed_size = gzip_size - Container.gzip.size() + wrap.size();
 
                 // compress original stream to compressed stream
                 {
