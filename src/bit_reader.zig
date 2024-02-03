@@ -10,7 +10,7 @@ pub fn bitReader(reader: anytype) BitReader(@TypeOf(reader)) {
 pub fn BitReader(comptime ReaderType: type) type {
     return struct {
         // Underlying reader used for filling internal bits buffer
-        forward_reader: ReaderType,
+        forward_reader: ReaderType = undefined,
         // Internal buffer of 64 bits
         bits: u64 = 0,
         // Number of bits in the buffer

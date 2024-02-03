@@ -77,8 +77,8 @@ pub const SlidingWindow = struct {
 
     // Read part of available data. Can return less than max even if there are
     // more than max decoded data.
-    pub fn readAtMost(self: *SlidingWindow, max: usize) []const u8 {
-        const rb = self.readBlock(max);
+    pub fn readAtMost(self: *SlidingWindow, limit: usize) []const u8 {
+        const rb = self.readBlock(if (limit == 0) buffer_len else limit);
         defer self.rp += rb.len;
         return self.buffer[rb.head..rb.tail];
     }

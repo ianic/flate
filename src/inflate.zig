@@ -10,22 +10,20 @@ const Token = @import("Token.zig");
 const codegen_order = @import("consts.zig").huffman.codegen_order;
 
 pub fn decompress(comptime wrap: Wrapper, input_reader: anytype, output_writer: anytype) !void {
-    var inf = decompressor(wrap, input_reader);
-    while (try inf.nextChunk()) |buf| {
-        try output_writer.writeAll(buf);
-    }
+    var inf = inflate(wrap, input_reader);
+    try inf.decompress(input_reader, output_writer);
 }
 
-pub fn decompressor(comptime wrap: Wrapper, reader: anytype) Inflate(wrap, @TypeOf(reader)) {
+pub fn inflate(comptime wrap: Wrapper, reader: anytype) Inflate(wrap, @TypeOf(reader)) {
     return Inflate(wrap, @TypeOf(reader)).init(reader);
 }
 
 pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
-    const BitReaderType = BitReader(ReaderType);
-    const F = BitReaderType.flag;
-
     return struct {
-        bits: BitReaderType,
+        const BitReaderType = BitReader(ReaderType);
+        const F = BitReaderType.flag;
+
+        bits: BitReaderType = .{},
         win: SlidingWindow = .{},
         hasher: wrap.Hasher() = .{},
 
@@ -48,23 +46,35 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
 
         const Self = @This();
 
+        pub const Error = ReaderType.Error || error{
+            EndOfStream,
+            Deflate,
+            DeflateInvalidBlock,
+            DeflateWrongNlen,
+            GzipFooterChecksum,
+            GzipFooterSize,
+            ZlibFooterChecksum,
+            InvalidGzipHeader,
+            InvalidZlibHeader,
+        };
+
         pub fn init(rt: ReaderType) Self {
             return .{ .bits = BitReaderType.init(rt) };
         }
 
         inline fn windowFull(self: *Self) bool {
-            // 258 is largest back reference length.
-            // That much bytes can be produced in single step.
+            // 258 is largest match length. That much bytes can be produced in
+            // single decode step.
             return self.win.free() < 258 + 1;
         }
 
-        fn blockHeader(self: *Self) !void {
+        fn blockHeader(self: *Self) Error!void {
             self.bfinal = try self.bits.read(u1);
             self.block_type = try self.bits.read(u2);
         }
 
-        fn storedBlock(self: *Self) !bool {
-            self.bits.alignToByte(); // skip 5 bits (block header is 3 bits)
+        fn storedBlock(self: *Self) Error!bool {
+            self.bits.alignToByte(); // skip 5 bits padding (block header is 3 bits)
             var len = try self.bits.read(u16);
             const nlen = try self.bits.read(u16);
             if (len != ~nlen) return error.DeflateWrongNlen;
@@ -77,7 +87,7 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
             return true;
         }
 
-        fn fixedBlock(self: *Self) !bool {
+        fn fixedBlock(self: *Self) Error!bool {
             while (!self.windowFull()) {
                 const code = try self.bits.readFixedCode();
                 switch (code) {
@@ -92,14 +102,14 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
 
         // Handles fixed block non literal (length) code.
         // Length code is followed by 5 bits of distance code.
-        fn fixedDistanceCode(self: *Self, code: u8) !void {
+        fn fixedDistanceCode(self: *Self, code: u8) Error!void {
             try self.bits.fill(5 + 5 + 13);
             const length = try self.decodeLength(code);
             const distance = try self.decodeDistance(try self.bits.readF(u5, F.buffered));
             self.win.writeCopy(length, distance);
         }
 
-        inline fn decodeLength(self: *Self, code: u8) !u16 {
+        inline fn decodeLength(self: *Self, code: u8) Error!u16 {
             assert(code <= 28);
             const ml = Token.matchLength(code);
             return if (ml.extra_bits == 0) // 0 - 5 extra bits
@@ -108,7 +118,7 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
                 ml.base + try self.bits.readN(ml.extra_bits, F.buffered);
         }
 
-        inline fn decodeDistance(self: *Self, code: u8) !u16 {
+        inline fn decodeDistance(self: *Self, code: u8) Error!u16 {
             assert(code <= 29);
             const md = Token.matchDistance(code);
             return if (md.extra_bits == 0) // 0 - 13 extra bits
@@ -117,7 +127,7 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
                 md.base + try self.bits.readN(md.extra_bits, F.buffered);
         }
 
-        fn dynamicBlockHeader(self: *Self) !void {
+        fn dynamicBlockHeader(self: *Self) Error!void {
             const hlit: u16 = @as(u16, try self.bits.read(u5)) + 257; // number of ll code entries present - 257
             const hdist: u16 = @as(u16, try self.bits.read(u5)) + 1; // number of distance code entries - 1
             const hclen: u8 = @as(u8, try self.bits.read(u4)) + 4; // hclen + 4 code lenths are encoded
@@ -155,7 +165,7 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
         // Decode code length symbol to code length. Writes decoded lendth into
         // lens slice starting at position pos. Returns number of postitions
         // advanced.
-        fn dynamicCodeLength(self: *Self, code: u16, lens: []u4, pos: usize) !usize {
+        fn dynamicCodeLength(self: *Self, code: u16, lens: []u4, pos: usize) Error!usize {
             assert(code <= 18);
             switch (code) {
                 0...15 => {
@@ -180,7 +190,7 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
             }
         }
 
-        fn dynamicBlock(self: *Self) !bool {
+        fn dynamicBlock(self: *Self) Error!bool {
             while (!self.windowFull()) {
                 try self.bits.fill(15); // optimization so other bit reads can be buffered (avoiding one `if` in hot path)
                 const sym = try self.decodeSymbol(&self.lit_h);
@@ -204,7 +214,7 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
         // decoder to find symbol for that code. We then know how many bits is
         // used. Shift bit reader for that much bits, those bits are used. And
         // return symbol.
-        inline fn decodeSymbol(self: *Self, decoder: anytype) !hfd.Symbol {
+        inline fn decodeSymbol(self: *Self, decoder: anytype) Error!hfd.Symbol {
             const sym = decoder.find(try self.bits.peekF(u15, F.buffered | F.reverse));
             self.bits.shift(sym.code_bits);
             return sym;
@@ -241,58 +251,71 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
             }
         }
 
-        fn parseHeader(self: *Self) !void {
+        fn parseHeader(self: *Self) Error!void {
             try wrap.parseHeader(&self.bits);
         }
 
-        fn parseFooter(self: *Self) !void {
+        fn parseFooter(self: *Self) Error!void {
             try wrap.parseFooter(&self.hasher, &self.bits);
         }
 
-        /// Returns decompressed data from internal sliding window buffer.
-        /// Returned buffer can be any length between 0 and 65536 bytes,
-        /// null means end of stream reached.
+        /// Replaces the inner reader with new reader.
+        fn setReader(self: *Self, new_reader: ReaderType) void {
+            self.bits.forward_reader = new_reader;
+            if (self.state == .end or self.state == .protocol_footer) {
+                self.state = .protocol_header;
+            }
+        }
+
+        /// Reads all compressed data from `input_reader` stream and writes
+        /// uncompressed data to the `output_writer` stream. Can be called
+        /// multiple times with different readers and writers. Internal history
+        /// is presserved between calls. All readers must be part of the same
+        /// deflate stream.
+        pub fn decompress(self: *Self, input_reader: ReaderType, output_writer: anytype) !void {
+            self.setReader(input_reader);
+            while (try self.next()) |buf| {
+                try output_writer.writeAll(buf);
+            }
+        }
+
+        /// Iterator interface
         /// Can be used in iterator like loop without memcpy to another buffer:
-        ///   while (try inflate.nextChunk()) |buf| { ... }
-        pub fn nextChunk(self: *Self) Error!?[]const u8 {
+        ///   while (try inflate.next()) |buf| { ... }
+        pub fn next(self: *Self) Error!?[]const u8 {
+            const out = try self.get(0);
+            if (out.len == 0) return null;
+            return out;
+        }
+
+        /// Returns decompressed data from internal sliding window buffer.
+        /// Returned buffer can be any length between 0 and `limit` bytes.
+        /// 0 returned bytes means end of stream reached.
+        /// With limit=0 returns as much data can. It newer will be more
+        /// than 65536 bytes, which is limit of internal buffer.
+        pub fn get(self: *Self, limit: usize) Error![]const u8 {
             while (true) {
-                const out = self.win.read();
-                self.hasher.update(out);
-                if (out.len > 0) return out;
-                if (self.state == .end) return null;
+                const out = self.win.readAtMost(limit);
+                if (out.len > 0) {
+                    self.hasher.update(out);
+                    return out;
+                }
+                if (self.state == .end) return out;
                 try self.step();
             }
         }
 
-        // Reader interface implementation
+        // Reader interface
 
-        pub const Error = ReaderType.Error || error{
-            EndOfStream,
-            Deflate,
-            DeflateInvalidBlock,
-            DeflateWrongNlen,
-            GzipFooterChecksum,
-            GzipFooterSize,
-            ZlibFooterChecksum,
-            InvalidGzipHeader,
-            InvalidZlibHeader,
-        };
         pub const Reader = std.io.Reader(*Self, Error, read);
 
         /// Returns the number of bytes read. It may be less than buffer.len.
         /// If the number of bytes read is 0, it means end of stream.
         /// End of stream is not an error condition.
         pub fn read(self: *Self, buffer: []u8) Error!usize {
-            while (true) {
-                const out = self.win.readAtMost(buffer.len);
-                if (out.len > 0) {
-                    self.hasher.update(out);
-                    @memcpy(buffer[0..out.len], out);
-                    return out.len;
-                }
-                if (self.state == .end) return 0;
-                try self.step();
-            }
+            const out = try self.get(buffer.len);
+            @memcpy(buffer[0..out.len], out);
+            return out.len;
         }
 
         pub fn reader(self: *Self) Reader {
@@ -358,6 +381,16 @@ test "flate decompress" {
         defer al.deinit();
 
         try decompress(.raw, fb.reader(), al.writer());
+        try testing.expectEqualStrings(c.out, al.items);
+    }
+
+    var dcp: Inflate(.raw, std.io.FixedBufferStream([]const u8).Reader) = .{};
+    for (cases) |c| {
+        var fb = std.io.fixedBufferStream(c.in);
+        var al = std.ArrayList(u8).init(testing.allocator);
+        defer al.deinit();
+
+        try dcp.decompress(fb.reader(), al.writer());
         try testing.expectEqualStrings(c.out, al.items);
     }
 }
