@@ -25,9 +25,10 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
 
         bits: BitReaderType = .{},
         win: SlidingWindow = .{},
+        // Hashes, produces checkusm, of uncompressed data for gzip/zlib footer.
         hasher: wrap.Hasher() = .{},
 
-        // dynamic block huffman codes
+        // dynamic block huffman code decoders
         lit_h: hfd.LiteralDecoder = .{}, // literals
         dst_h: hfd.DistanceDecoder = .{}, // distances
 
@@ -46,16 +47,11 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
 
         const Self = @This();
 
-        pub const Error = ReaderType.Error || error{
+        pub const Error = ReaderType.Error || Wrapper.Error || error{
             EndOfStream,
-            Deflate,
-            DeflateInvalidBlock,
+            DeflateInvalidCode,
+            DeflateInvalidBlockType,
             DeflateWrongNlen,
-            GzipFooterChecksum,
-            GzipFooterSize,
-            ZlibFooterChecksum,
-            InvalidGzipHeader,
-            InvalidZlibHeader,
         };
 
         pub fn init(rt: ReaderType) Self {
@@ -94,7 +90,7 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
                     0...255 => self.win.write(@intCast(code)),
                     256 => return true, // end of block
                     257...285 => try self.fixedDistanceCode(@intCast(code - 257)),
-                    else => return error.Deflate,
+                    else => return error.DeflateInvalidCode,
                 }
             }
             return false;
@@ -236,7 +232,7 @@ pub fn Inflate(comptime wrap: Wrapper, comptime ReaderType: type) type {
                         0 => try self.storedBlock(),
                         1 => try self.fixedBlock(),
                         2 => try self.dynamicBlock(),
-                        else => return error.DeflateInvalidBlock,
+                        else => return error.DeflateInvalidBlockType,
                     };
                     if (done) {
                         self.state = if (self.bfinal == 1) .protocol_footer else .block_header;

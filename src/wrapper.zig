@@ -27,7 +27,16 @@ pub const Wrapper = enum {
 
     pub const list = [_]Wrapper{ .raw, .gzip, .zlib };
 
-    pub fn writeHeader(comptime wrap: Wrapper, writer: anytype) !void {
+    pub const Error = error{
+        GzipHeader,
+        ZlibHeader,
+        GzipFooterChecksum,
+        GzipFooterSize,
+        ZlibFooterChecksum,
+        EndOfStream,
+    };
+
+    pub fn writeHeader(comptime wrap: Wrapper, writer: anytype) Error!void {
         switch (wrap) {
             .gzip => {
                 // GZIP 10 byte header (https://datatracker.ietf.org/doc/html/rfc1952#page-5):
@@ -59,7 +68,7 @@ pub const Wrapper = enum {
         }
     }
 
-    pub fn writeFooter(comptime wrap: Wrapper, hasher: *Hasher(wrap), writer: anytype) !void {
+    pub fn writeFooter(comptime wrap: Wrapper, hasher: *Hasher(wrap), writer: anytype) Error!void {
         var bits: [4]u8 = undefined;
         switch (wrap) {
             .gzip => {
@@ -85,7 +94,7 @@ pub const Wrapper = enum {
         }
     }
 
-    pub fn parseHeader(comptime wrap: Wrapper, reader: anytype) !void {
+    pub fn parseHeader(comptime wrap: Wrapper, reader: anytype) Error!void {
         switch (wrap) {
             .gzip => try parseGzipHeader(reader),
             .zlib => try parseZlibHeader(reader),
@@ -93,14 +102,14 @@ pub const Wrapper = enum {
         }
     }
 
-    fn parseGzipHeader(reader: anytype) !void {
+    fn parseGzipHeader(reader: anytype) Error!void {
         const magic1 = try reader.read(u8);
         const magic2 = try reader.read(u8);
         const method = try reader.read(u8);
         const flags = try reader.read(u8);
         try reader.skipBytes(6); // mtime(4), xflags, os
         if (magic1 != 0x1f or magic2 != 0x8b or method != 0x08)
-            return error.InvalidGzipHeader;
+            return error.GzipHeader;
         // Flags description: https://www.rfc-editor.org/rfc/rfc1952.html#page-5
         if (flags != 0) {
             if (flags & 0b0000_0100 != 0) { // FEXTRA
@@ -119,15 +128,15 @@ pub const Wrapper = enum {
         }
     }
 
-    fn parseZlibHeader(reader: anytype) !void {
+    fn parseZlibHeader(reader: anytype) Error!void {
         const cinfo_cm = try reader.read(u8);
         _ = try reader.read(u8);
         if (cinfo_cm != 0x78) {
-            return error.InvalidZlibHeader;
+            return error.ZlibHeader;
         }
     }
 
-    pub fn parseFooter(comptime wrap: Wrapper, hasher: *Hasher(wrap), reader: anytype) !void {
+    pub fn parseFooter(comptime wrap: Wrapper, hasher: *Hasher(wrap), reader: anytype) Error!void {
         switch (wrap) {
             .gzip => {
                 if (try reader.read(u32) != hasher.chksum()) return error.GzipFooterChecksum;
