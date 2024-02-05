@@ -42,19 +42,21 @@ const LevelArgs = struct {
 };
 
 pub fn compress(comptime container: Container, reader: anytype, writer: anytype, level: Level) !void {
-    var df = try compressor(container, writer, level);
-    try df.stream(reader);
-    try df.close();
+    var c = try compressor(container, writer, level);
+    try c.compress(reader);
+    try c.close();
 }
 
-pub fn compressor(comptime container: Container, writer: anytype, level: Level) !Deflate(
+pub fn compressor(comptime container: Container, writer: anytype, level: Level) !Compressor(
     container,
     @TypeOf(writer),
-    hbw.HuffmanBitWriter(@TypeOf(writer)),
 ) {
-    const WriterType = @TypeOf(writer);
-    const TokenWriter = hbw.HuffmanBitWriter(WriterType);
-    return try Deflate(container, WriterType, TokenWriter).init(writer, level);
+    return try Compressor(container, @TypeOf(writer)).init(writer, level);
+}
+
+pub fn Compressor(comptime container: Container, comptime WriterType: type) type {
+    const TokenWriterType = hbw.HuffmanBitWriter(WriterType);
+    return Deflate(container, WriterType, TokenWriterType);
 }
 
 // Default compression algorithm. Has two steps: tokenization and token
@@ -62,12 +64,12 @@ pub fn compressor(comptime container: Container, writer: anytype, level: Level) 
 //
 // Tokenization takes uncompressed input stream and produces list of tokens.
 // Each token can be literal (byte of data) or match (backrefernce to previous
-// data with distance and length). Tokenization acumulates `const.block.tokens`
+// data with length and distance). Tokenization acumulates `const.block.tokens`
 // number of tokens, when full or `flush` is called tokens are passed to the
 // `token_writer`. Level defines how hard (how slow) it tries to find match.
 //
 // Token writer will decide which type of deflate block to write (stored, fixed,
-// dynamic) and encode tokens to the output byte stream.   Client has to call
+// dynamic) and encode tokens to the output byte stream. Client has to call
 // `close` to write block with the final bit set.
 //
 // Container defines type of header and footer which can be gzip, zlib or raw.
@@ -91,12 +93,12 @@ fn Deflate(comptime container: Container, comptime WriterType: type, comptime To
 
         const Self = @This();
         pub fn init(wrt: WriterType, level: Level) !Self {
-            var self = Self{
+            const self = Self{
                 .wrt = wrt,
                 .token_writer = TokenWriter.init(wrt),
                 .level = LevelArgs.get(level),
             };
-            try self.writeHeader();
+            try container.writeHeader(self.wrt);
             return self;
         }
 
@@ -220,55 +222,48 @@ fn Deflate(comptime container: Container, comptime WriterType: type, comptime To
         }
 
         fn flushTokens(self: *Self, final: bool) !void {
-            try self.token_writer.writeBlock(self.tokens.tokens(), final, self.win.tokensBuffser());
-            if (final) try self.token_writer.flush();
+            try self.token_writer.writeBlock(self.tokens.tokens(), final, self.win.tokensBuffer());
+            try self.token_writer.flush();
             self.tokens.reset();
             self.win.flushed();
         }
 
+        // Flush internal buffers to the output writer. Writes deflate block to
+        // the writer. Internal tokens buffer is empty after this.
         pub fn flush(self: *Self) !void {
             try self.tokenize(.flush);
         }
 
-        pub fn close(self: *Self) !void {
-            try self.tokenize(.final);
-            try self.writeFooter();
-        }
-
-        pub fn write(self: *Self, input: []const u8) !usize {
-            var buf = input;
-            self.hasher.update(buf);
-
-            while (buf.len > 0) {
-                const n = self.win.write(buf);
-                if (n == 0) {
-                    try self.tokenize(.none);
-                    self.slide();
-                    continue;
-                }
-                buf = buf[n..];
-            }
-            try self.tokenize(.none);
-
-            return input.len;
-        }
-
-        // slide win and if needed lookup tables
+        // Slide win and if needed lookup tables.
         inline fn slide(self: *Self) void {
             const n = self.win.slide();
             self.lookup.slide(n);
         }
 
-        // TODO: name for this
-        pub fn stream(self: *Self, rdr: anytype) !void {
+        // Flush internal buffers and write deflate final block.
+        pub fn close(self: *Self) !void {
+            try self.tokenize(.final);
+            try container.writeFooter(&self.hasher, self.wrt);
+        }
+
+        pub fn setWriter(self: *Self, new_writer: WriterType) void {
+            self.token_writer.setWriter(new_writer);
+            self.wrt = new_writer;
+        }
+
+        // Writes all data from the input reader of uncompressed data.
+        // It is up to the caller to call flush or close if there is need to
+        // output compressed blocks.
+        pub fn compress(self: *Self, reader: anytype) !void {
             while (true) {
                 // read from rdr into win
                 const buf = self.win.writable();
                 if (buf.len == 0) {
+                    try self.tokenize(.none);
                     self.slide();
                     continue;
                 }
-                const n = try rdr.readAll(buf);
+                const n = try reader.readAll(buf);
                 self.hasher.update(buf[0..n]);
                 self.win.written(n);
                 // process win
@@ -283,97 +278,55 @@ fn Deflate(comptime container: Container, comptime WriterType: type, comptime To
         pub const Writer = io.Writer(*Self, Error, write);
         pub const Error = TokenWriter.Error;
 
+        // Write `input` of uncompressed data.
+        pub fn write(self: *Self, input: []const u8) !usize {
+            var fbs = io.fixedBufferStream(input);
+            try self.compress(fbs.reader());
+            return input.len;
+        }
+
         pub fn writer(self: *Self) Writer {
             return .{ .context = self };
-        }
-
-        // header and footer
-        fn writeHeader(self: *Self) !void {
-            try container.writeHeader(self.wrt);
-        }
-
-        fn writeFooter(self: *Self) !void {
-            try container.writeFooter(&self.hasher, self.wrt);
         }
     };
 }
 
-pub fn compressHuffmanOnly(comptime container: Container, reader: anytype, writer: anytype) !void {
-    var df = try huffmanOnlyCompressor(container, writer);
-    try df.stream(reader);
-    try df.close();
-}
-
-pub fn huffmanOnlyCompressor(comptime container: Container, writer: anytype) !DeflateHuffmanOnly(
+pub fn huffmanOnlyCompressor(comptime container: Container, writer: anytype) !HuffmanOnlyCompressor(
     container,
     @TypeOf(writer),
-    hbw.HuffmanBitWriter(@TypeOf(writer)),
 ) {
-    const WriterType = @TypeOf(writer);
-    const TokenWriter = hbw.HuffmanBitWriter(WriterType);
-    return try DeflateHuffmanOnly(container, WriterType, TokenWriter).init(writer);
+    return try HuffmanOnlyCompressor(container, @TypeOf(writer)).init(writer);
 }
 
-// Creates huffman only deflate blocks. Without LZ77 compression, without
-// finding matches in the history.
-fn DeflateHuffmanOnly(comptime container: Container, comptime WriterType: type, comptime TokenWriter: type) type {
+// Creates huffman only deflate blocks. Without LZ77 compression (without
+// finding matches in the history).
+pub fn HuffmanOnlyCompressor(comptime container: Container, comptime WriterType: type) type {
+    const Encoder = hbw.HuffmanBitWriter(WriterType);
     return struct {
         wrt: WriterType,
-        token_writer: TokenWriter,
+        encoder: Encoder,
         hasher: container.Hasher() = .{},
 
         const Self = @This();
 
         pub fn init(wrt: WriterType) !Self {
-            var self = Self{
+            const self = Self{
                 .wrt = wrt,
-                .token_writer = TokenWriter.init(wrt),
+                .encoder = Encoder.init(wrt),
             };
-            try self.writeHeader();
+            try container.writeHeader(self.wrt);
             return self;
         }
 
-        pub fn flush(self: *Self) !void {
-            try self.token_writer.flush();
-        }
-
         pub fn close(self: *Self) !void {
-            try self.token_writer.writeBlockHuff(true, "");
-            try self.writeFooter();
-        }
-
-        pub fn write(self: *Self, input: []const u8) !usize {
-            self.hasher.update(input);
-            try self.token_writer.writeBlockHuff(false, input);
-            return input.len;
-        }
-
-        pub fn stream(self: *Self, rdr: anytype) !void {
-            var buf: [64 * 1024]u8 = undefined;
-            while (true) {
-                const n = try rdr.readAll(&buf);
-                self.hasher.update(buf[0..n]);
-                try self.token_writer.writeBlockHuff(false, buf[0..n]);
-                if (n < buf.len) break; // no more data in reader
-            }
-        }
-
-        // Writer interface
-
-        pub const Writer = io.Writer(*Self, Error, write);
-        pub const Error = TokenWriter.Error;
-
-        pub fn writer(self: *Self) Writer {
-            return .{ .context = self };
-        }
-
-        // header and footer
-        fn writeHeader(self: *Self) !void {
-            try container.writeHeader(self.wrt);
-        }
-
-        fn writeFooter(self: *Self) !void {
+            try self.encoder.writeBlockStored("", true);
+            try self.encoder.flush();
             try container.writeFooter(&self.hasher, self.wrt);
+        }
+
+        pub fn writeBlock(self: *Self, input: []const u8) !void {
+            self.hasher.update(input);
+            try self.encoder.writeBlockHuff(false, input);
         }
     };
 }
@@ -545,14 +498,14 @@ const Window = struct {
         self.fp = @intCast(self.rp);
     }
 
-    pub fn tokensBuffser(self: *Window) ?[]const u8 {
+    pub fn tokensBuffer(self: *Window) ?[]const u8 {
         assert(self.fp <= self.rp);
         if (self.fp < 0) return null;
         return self.buffer[@intCast(self.fp)..self.rp];
     }
 };
 
-test "StreamWindow match" {
+test "Window match" {
     const data = "Blah blah blah blah blah!";
     var win: Window = .{};
     try expect(win.write(data) == data.len);
@@ -572,13 +525,13 @@ test "StreamWindow match" {
     try expect(win.match(15, 20, 4) == 0);
 }
 
-test "StreamWindow slide" {
+test "Window slide" {
     var win: Window = .{};
     win.wp = Window.buffer_len - 11;
     win.rp = Window.buffer_len - 111;
     win.buffer[win.rp] = 0xab;
     try expect(win.lookahead().len == 100);
-    try expect(win.tokensBuffser().?.len == win.rp);
+    try expect(win.tokensBuffer().?.len == win.rp);
 
     const n = win.slide();
     try expect(n == 32757);
@@ -586,7 +539,7 @@ test "StreamWindow slide" {
     try expect(win.rp == Window.hist_len - 111);
     try expect(win.wp == Window.hist_len - 11);
     try expect(win.lookahead().len == 100);
-    try expect(win.tokensBuffser() == null);
+    try expect(win.tokensBuffer() == null);
 }
 
 test "check struct sizes" {
@@ -702,7 +655,7 @@ test "deflate file tokenization" {
             // produce tokens list and pass that list to the TokenDecoder. This
             // TokenDecoder uses SlidingWindow from inflate to convert list of
             // tokens back to the uncompressed stream.
-            try cmp.stream(original.reader());
+            try cmp.compress(original.reader());
             try cmp.flush();
             const expected_count = case.tokens_count[i];
             const actual = cmp.token_writer.tokens_count;

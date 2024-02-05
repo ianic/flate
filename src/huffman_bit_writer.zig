@@ -40,12 +40,12 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
             };
         }
 
-        fn reset(self: *Self, new_writer: WriterType) void {
-            self.bit_writer.reset(new_writer);
-        }
-
         pub fn flush(self: *Self) Error!void {
             try self.bit_writer.flush();
+        }
+
+        pub fn setWriter(self: *Self, new_writer: WriterType) void {
+            self.bit_writer.setWriter(new_writer);
         }
 
         inline fn writeCode(self: *Self, c: hc.HuffCode) Error!void {
@@ -376,7 +376,7 @@ pub fn HuffmanBitWriter(comptime WriterType: type) type {
             try self.writeTokens(tokens, &literal_encoding.codes, &distance_encoding.codes);
         }
 
-        fn writeBlockStored(self: *Self, input: []const u8, eof: bool) Error!void {
+        pub fn writeBlockStored(self: *Self, input: []const u8, eof: bool) Error!void {
             try self.writeStoredHeader(input.len, eof);
             try self.bit_writer.writeBytes(input);
         }
@@ -688,7 +688,7 @@ fn testWriteBlock(comptime tfn: TestFn, input: ?[]const u8, want: []const u8, to
     buf.deinit();
     buf = ArrayList(u8).init(testing.allocator);
     defer buf.deinit();
-    bw.reset(buf.writer());
+    bw.setWriter(buf.writer());
 
     try tfn.write(&bw, tokens, input, true);
     try bw.flush();

@@ -1,71 +1,71 @@
-const deflate = @import("deflate.zig");
-const inflate = @import("inflate.zig");
+/// In computing, Deflate (stylized as DEFLATE, and also called Flate[1][2]) is
+/// a lossless data compression file format that uses a combination of LZ77 and
+/// Huffman coding. It was designed by Phil Katz, for version 2 of his PKZIP
+/// archiving tool. Deflate was later specified in RFC 1951 (1996).[3]
+/// Encoder/compressor
+///
+/// Inflate is the decoding process that takes a Deflate bitstream for
+/// decompression and correctly produces the original full-size data or file.
+/// decoder/decompressor
+///
+pub const deflate = @import("deflate.zig");
+pub const inflate = @import("inflate.zig");
 
-pub const Level = deflate.Level;
+pub const Level = @import("deflate.zig").Level;
 
-pub fn decompress(reader: anytype, writer: anytype) !void {
-    try inflate.decompress(.raw, reader, writer);
+const Container = @import("container.zig").Container;
+
+fn byContainer(comptime container: Container) type {
+    return struct {
+        pub fn decompress(reader: anytype, writer: anytype) !void {
+            try inflate.decompress(container, reader, writer);
+        }
+
+        pub fn Decompressor(comptime ReaderType: type) type {
+            return inflate.Inflate(container, ReaderType);
+        }
+
+        pub fn decompressor(reader: anytype) Decompressor(@TypeOf(reader)) {
+            return inflate.decompressor(container, reader);
+        }
+
+        pub fn compress(reader: anytype, writer: anytype, level: Level) !void {
+            try deflate.compress(container, reader, writer, level);
+        }
+
+        pub fn Compressor(comptime WriterType: type) type {
+            return deflate.Compressor(container, WriterType);
+        }
+
+        pub fn compressor(writer: anytype, level: Level) !Compressor(@TypeOf(writer)) {
+            return try deflate.compressor(container, writer, level);
+        }
+
+        pub fn HuffmanOnlyCompressor(comptime WriterType: type) type {
+            return deflate.HuffmanOnlyCompressor(container, WriterType);
+        }
+
+        pub fn huffmanOnlyCompressor(writer: anytype) !HuffmanOnlyCompressor(@TypeOf(writer)) {
+            return deflate.huffmanOnlyCompressor(container, writer);
+        }
+
+        pub fn compressHuffmanOnly(reader: anytype, writer: anytype) !void {
+            var cmp = try huffmanOnlyCompressor(writer);
+            var buf: [1024 * 64]u8 = undefined;
+            while (true) {
+                const n = try reader.readAll(&buf);
+                if (n == 0) break;
+                try cmp.writeBlock(buf[0..n]);
+                if (n < buf.len) break;
+            }
+            try cmp.close();
+        }
+    };
 }
 
-pub fn decompressor(reader: anytype) inflate.Inflate(.raw, @TypeOf(reader)) {
-    return inflate.inflate(.raw, reader);
-}
-
-pub fn compress(reader: anytype, writer: anytype, level: Level) !void {
-    try deflate.compress(.raw, reader, writer, level);
-}
-
-pub fn compressHuffmanOnly(reader: anytype, writer: anytype) !void {
-    try deflate.compressHuffmanOnly(.raw, reader, writer);
-}
-
-pub fn compressor(writer: anytype, level: Level) !void {
-    try deflate.compressor(.raw, writer, level);
-}
-
-pub const gzip = struct {
-    pub fn decompress(reader: anytype, writer: anytype) !void {
-        try inflate.decompress(.gzip, reader, writer);
-    }
-
-    pub fn decompressor(reader: anytype) inflate.Inflate(.gzip, @TypeOf(reader)) {
-        return inflate.decompressor(.gzip, reader);
-    }
-
-    pub fn compress(reader: anytype, writer: anytype, level: Level) !void {
-        try deflate.compress(.gzip, reader, writer, level);
-    }
-
-    pub fn compressHuffmanOnly(reader: anytype, writer: anytype) !void {
-        try deflate.compressHuffmanOnly(.gzip, reader, writer);
-    }
-
-    pub fn compressor(writer: anytype, level: Level) !deflate.Compressor(.gzip, @TypeOf(writer)) {
-        return try deflate.compressor(.gzip, writer, level);
-    }
-};
-
-pub const zlib = struct {
-    pub fn decompress(reader: anytype, writer: anytype) !void {
-        try inflate.decompress(.zlib, reader, writer);
-    }
-
-    pub fn decompressor(reader: anytype) inflate.Inflate(.zlib, @TypeOf(reader)) {
-        return inflate.decompressor(.zlib, reader);
-    }
-
-    pub fn compress(reader: anytype, writer: anytype, level: Level) !void {
-        try deflate.compress(.zlib, reader, writer, level);
-    }
-
-    pub fn compressHuffmanOnly(reader: anytype, writer: anytype) !void {
-        try deflate.compressHuffmanOnly(.zlib, reader, writer);
-    }
-
-    pub fn compressor(writer: anytype, level: Level) !deflate.Compressor(.zlib, @TypeOf(writer)) {
-        return try deflate.compressor(.zlib, writer, level);
-    }
-};
+pub const raw = byContainer(.raw);
+pub const gzip = byContainer(.gzip);
+pub const zlib = byContainer(.zlib);
 
 test {
     _ = @import("deflate.zig");
@@ -99,7 +99,7 @@ test "decompress" {
         var out = std.ArrayList(u8).init(testing.allocator);
         defer out.deinit();
 
-        try decompress(raw_in.reader(), out.writer());
+        try raw.decompress(raw_in.reader(), out.writer());
         try testing.expectEqualStrings(expected, out.items);
     }
     // gzip
@@ -122,7 +122,7 @@ test "decompress" {
     // raw with decompressor interface
     {
         raw_in.reset();
-        var cmp = decompressor(raw_in.reader());
+        var cmp = raw.decompressor(raw_in.reader());
         try testing.expectEqualStrings(expected, (try cmp.next()).?);
         try testing.expect((try cmp.next()) == null);
     }
@@ -130,31 +130,30 @@ test "decompress" {
     // raw with decompressor reader interface
     {
         raw_in.reset();
-        var cmp = decompressor(raw_in.reader());
+        var cmp = raw.decompressor(raw_in.reader());
         var rdr = cmp.reader();
         const n = try rdr.readAll(&buf);
         try testing.expectEqualStrings(expected, buf[0..n]);
     }
-    // // gzip decompressor
-    // {
-    //     gzip_in.reset();
-    //     var cmp = gzip.decompressor(gzip_in.reader());
-    //     var rdr = cmp.reader();
-    //     const n = try rdr.readAll(&buf);
-    //     try testing.expectEqualStrings(expected, buf[0..n]);
-    // }
-    // // zlib decompressor
-    // {
-    //     zlib_in.reset();
-    //     var cmp = zlib.decompressor(zlib_in.reader());
-    //     var rdr = cmp.reader();
-    //     const n = try rdr.readAll(&buf);
-    //     try testing.expectEqualStrings(expected, buf[0..n]);
-    // }
+    // gzip decompressor
+    {
+        gzip_in.reset();
+        var cmp = gzip.decompressor(gzip_in.reader());
+        var rdr = cmp.reader();
+        const n = try rdr.readAll(&buf);
+        try testing.expectEqualStrings(expected, buf[0..n]);
+    }
+    // zlib decompressor
+    {
+        zlib_in.reset();
+        var cmp = zlib.decompressor(zlib_in.reader());
+        var rdr = cmp.reader();
+        const n = try rdr.readAll(&buf);
+        try testing.expectEqualStrings(expected, buf[0..n]);
+    }
 }
 
 test "compress/decompress" {
-    const Container = @import("container.zig").Container;
     const fixedBufferStream = std.io.fixedBufferStream;
 
     var cmp_buf: [32 * 1024]u8 = undefined; // compressed data buffer
@@ -180,7 +179,7 @@ test "compress/decompress" {
     //     for (4..10) |ilevel| {
     //         var original = fixedBufferStream(data);
     //         var compressed = fixedBufferStream(&cmp_buf);
-    //         try deflate.compress(.gzip, original.reader(), compressed.writer(), .{ .level = @enumFromInt(ilevel) });
+    //         try compress(.gzip, original.reader(), compressed.writer(), .{ .level = @enumFromInt(ilevel) });
     //         std.debug.print("{d}, ", .{compressed.pos});
     //     }
     // }
@@ -199,25 +198,20 @@ test "compress/decompress" {
                 {
                     var original = fixedBufferStream(data);
                     var compressed = fixedBufferStream(&cmp_buf);
-
                     try deflate.compress(container, original.reader(), compressed.writer(), level);
-
                     try testing.expectEqual(compressed_size, compressed.pos);
                 }
                 // decompress compressed stream to decompressed stream
                 {
                     var compressed = fixedBufferStream(cmp_buf[0..compressed_size]);
                     var decompressed = fixedBufferStream(&dcm_buf);
-
                     try inflate.decompress(container, compressed.reader(), decompressed.writer());
-
                     try testing.expectEqualSlices(u8, data, decompressed.getWritten());
                 }
 
                 // compressor writer interface
                 {
                     var compressed = fixedBufferStream(&cmp_buf);
-
                     var cmp = try deflate.compressor(container, compressed.writer(), level);
                     var cmp_wrt = cmp.writer();
                     try cmp_wrt.writeAll(data);
@@ -228,11 +222,9 @@ test "compress/decompress" {
                 // decompressor reader interface
                 {
                     var compressed = fixedBufferStream(cmp_buf[0..compressed_size]);
-
-                    var dcm = inflate.inflate(container, compressed.reader());
+                    var dcm = inflate.decompressor(container, compressed.reader());
                     var dcm_rdr = dcm.reader();
                     const n = try dcm_rdr.readAll(&dcm_buf);
-
                     try testing.expectEqual(data.len, n);
                     try testing.expectEqualSlices(u8, data, dcm_buf[0..n]);
                 }
@@ -242,49 +234,23 @@ test "compress/decompress" {
         {
             const gzip_size = case.huffman_only_size;
 
-            inline for (Container.list) |wrap| { // for each wrapping
-                const compressed_size = gzip_size - Container.gzip.size() + wrap.size();
+            inline for (Container.list) |container| { // for each wrapping
+                const compressed_size = gzip_size - Container.gzip.size() + container.size();
 
                 // compress original stream to compressed stream
                 {
-                    var original = fixedBufferStream(data);
                     var compressed = fixedBufferStream(&cmp_buf);
-
-                    try deflate.compressHuffmanOnly(wrap, original.reader(), compressed.writer());
-
+                    var cmp = try deflate.huffmanOnlyCompressor(container, compressed.writer());
+                    try cmp.writeBlock(case.data);
+                    try cmp.close();
                     try testing.expectEqual(compressed_size, compressed.pos);
                 }
                 // decompress compressed stream to decompressed stream
                 {
                     var compressed = fixedBufferStream(cmp_buf[0..compressed_size]);
                     var decompressed = fixedBufferStream(&dcm_buf);
-
-                    try inflate.decompress(wrap, compressed.reader(), decompressed.writer());
-
+                    try inflate.decompress(container, compressed.reader(), decompressed.writer());
                     try testing.expectEqualSlices(u8, data, decompressed.getWritten());
-                }
-
-                // compressor writer interface
-                {
-                    var compressed = fixedBufferStream(&cmp_buf);
-
-                    var cmp = try deflate.huffmanOnlyCompressor(wrap, compressed.writer());
-                    var cmp_wrt = cmp.writer();
-                    try cmp_wrt.writeAll(data);
-                    try cmp.close();
-
-                    try testing.expectEqual(compressed_size, compressed.pos);
-                }
-                // decompressor reader interface
-                {
-                    var compressed = fixedBufferStream(cmp_buf[0..compressed_size]);
-
-                    var dcm = inflate.inflate(wrap, compressed.reader());
-                    var dcm_rdr = dcm.reader();
-                    const n = try dcm_rdr.readAll(&dcm_buf);
-
-                    try testing.expectEqual(data.len, n);
-                    try testing.expectEqualSlices(u8, data, dcm_buf[0..n]);
                 }
             }
         }

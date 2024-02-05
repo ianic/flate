@@ -1,4 +1,5 @@
 const std = @import("std");
+const assert = std.debug.assert;
 
 pub fn BitWriter(comptime WriterType: type) type {
     // buffer_flush_size indicates the buffer size
@@ -31,11 +32,9 @@ pub fn BitWriter(comptime WriterType: type) type {
             return .{ .inner_writer = writer };
         }
 
-        pub fn reset(self: *Self, new_writer: WriterType) void {
+        pub fn setWriter(self: *Self, new_writer: WriterType) void {
+            //assert(self.bits == 0 and self.nbits == 0 and self.nbytes == 0);
             self.inner_writer = new_writer;
-            self.bits = 0;
-            self.nbits = 0;
-            self.nbytes = 0;
         }
 
         pub fn flush(self: *Self) Error!void {

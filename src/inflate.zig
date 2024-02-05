@@ -9,12 +9,14 @@ const Container = @import("container.zig").Container;
 const Token = @import("Token.zig");
 const codegen_order = @import("consts.zig").huffman.codegen_order;
 
-pub fn decompress(comptime container: Container, input_reader: anytype, output_writer: anytype) !void {
-    var inf = inflate(container, input_reader);
-    try inf.decompress(input_reader, output_writer);
+// Decompresses deflate bit stream `reader` and writes uncompressed data to the
+// `writer` stream.
+pub fn decompress(comptime container: Container, reader: anytype, writer: anytype) !void {
+    var d = decompressor(container, reader);
+    try d.decompress(writer);
 }
 
-pub fn inflate(comptime container: Container, reader: anytype) Inflate(container, @TypeOf(reader)) {
+pub fn decompressor(comptime container: Container, reader: anytype) Inflate(container, @TypeOf(reader)) {
     return Inflate(container, @TypeOf(reader)).init(reader);
 }
 
@@ -219,7 +221,8 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
         fn step(self: *Self) !void {
             switch (self.state) {
                 .protocol_header => {
-                    try self.parseHeader();
+                    try container.parseHeader(&self.bits);
+
                     self.state = .block_header;
                 },
                 .block_header => {
@@ -240,42 +243,32 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
                 },
                 .protocol_footer => {
                     self.bits.alignToByte();
-                    try self.parseFooter();
+
+                    try container.parseFooter(&self.hasher, &self.bits);
                     self.state = .end;
                 },
                 .end => {},
             }
         }
 
-        fn parseHeader(self: *Self) !void {
-            try container.parseHeader(&self.bits);
-        }
-
-        fn parseFooter(self: *Self) !void {
-            try container.parseFooter(&self.hasher, &self.bits);
-        }
-
         /// Replaces the inner reader with new reader.
-        fn setReader(self: *Self, new_reader: ReaderType) void {
+        pub fn setReader(self: *Self, new_reader: ReaderType) void {
             self.bits.forward_reader = new_reader;
             if (self.state == .end or self.state == .protocol_footer) {
                 self.state = .protocol_header;
             }
         }
 
-        /// Reads all compressed data from `input_reader` stream and writes
-        /// uncompressed data to the `output_writer` stream. Can be called
-        /// multiple times with different readers and writers. Internal history
-        /// is presserved between calls. All readers must be part of the same
-        /// deflate stream.
-        pub fn decompress(self: *Self, input_reader: ReaderType, output_writer: anytype) !void {
-            self.setReader(input_reader);
+        // Reads all compressed data from the internal reader and outputs plain
+        // (uncompressed) data to the provided writer.
+        pub fn decompress(self: *Self, writer: anytype) !void {
             while (try self.next()) |buf| {
-                try output_writer.writeAll(buf);
+                try writer.writeAll(buf);
             }
         }
 
-        /// Iterator interface
+        // Iterator interface
+
         /// Can be used in iterator like loop without memcpy to another buffer:
         ///   while (try inflate.next()) |buf| { ... }
         pub fn next(self: *Self) Error!?[]const u8 {
@@ -377,16 +370,6 @@ test "flate decompress" {
         defer al.deinit();
 
         try decompress(.raw, fb.reader(), al.writer());
-        try testing.expectEqualStrings(c.out, al.items);
-    }
-
-    var dcp: Inflate(.raw, std.io.FixedBufferStream([]const u8).Reader) = .{};
-    for (cases) |c| {
-        var fb = std.io.fixedBufferStream(c.in);
-        var al = std.ArrayList(u8).init(testing.allocator);
-        defer al.deinit();
-
-        try dcp.decompress(fb.reader(), al.writer());
         try testing.expectEqualStrings(c.out, al.items);
     }
 }

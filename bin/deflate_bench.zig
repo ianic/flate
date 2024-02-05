@@ -1,5 +1,6 @@
 const std = @import("std");
 const flate = @import("flate");
+const raw = flate.raw;
 const gzip = flate.gzip;
 const zlib = flate.zlib;
 
@@ -41,16 +42,15 @@ pub fn run(output: anytype, opt: Options) !void {
     } else {
         if (opt.level == 0) {
             switch (opt.alg) {
-                .deflate => try flate.compressHuffmanOnly(input, output),
+                .deflate => try raw.compressHuffmanOnly(input, output),
                 .zlib => try zlib.compressHuffmanOnly(input, output),
                 .gzip => try gzip.compressHuffmanOnly(input, output),
             }
             return;
         }
-        //var fbs = std.io.fixedBufferStream(input);
         const level: flate.Level = @enumFromInt(opt.level);
         switch (opt.alg) {
-            .deflate => try flate.compress(input, output, level),
+            .deflate => try raw.compress(input, output, level),
             .zlib => try zlib.compress(input, output, level),
             .gzip => try gzip.compress(input, output, level),
             // .gzip => {

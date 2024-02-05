@@ -2,11 +2,15 @@ const std = @import("std");
 const testing = std.testing;
 
 pub const Symbol = packed struct {
-    pub const Kind = enum(u2) { literal, end_of_block, match };
+    pub const Kind = enum(u2) {
+        literal,
+        end_of_block,
+        match,
+    };
 
     symbol: u8, // symbol from alphabet
     code_bits: u4, // code bits count
-    kind: Kind,
+    kind: Kind = .literal,
 
     // Sorting less than function.
     pub fn asc(_: void, a: Symbol, b: Symbol) bool {
@@ -101,71 +105,72 @@ test "Huffman init/find" {
     var h: CodegenDecoder = .{};
     h.build(&code_lens);
 
-    // unused symbols
-    for (0..12) |i| {
-        try testing.expectEqual(@as(u16, 0), h.symbols[i].code_bits);
-    }
-
-    const data = [_]struct {
+    const expected = [_]struct {
         sym: Symbol,
         code: u16,
     }{
         .{
-            .code = 0b0000_000,
-            .sym = .{ .symbol = 3, .code_bits = 2, .kind = .literal },
+            .code = 0b00_00000,
+            .sym = .{ .symbol = 3, .code_bits = 2 },
         },
         .{
-            .code = 0b0100_000,
-            .sym = .{ .symbol = 18, .code_bits = 2, .kind = .literal },
+            .code = 0b01_00000,
+            .sym = .{ .symbol = 18, .code_bits = 2 },
         },
         .{
             .code = 0b100_0000,
-            .sym = .{ .symbol = 1, .code_bits = 3, .kind = .literal },
+            .sym = .{ .symbol = 1, .code_bits = 3 },
         },
         .{
-            .code = 0b1010_000,
-            .sym = .{ .symbol = 4, .code_bits = 3, .kind = .literal },
+            .code = 0b101_0000,
+            .sym = .{ .symbol = 4, .code_bits = 3 },
         },
         .{
-            .code = 0b1100_000,
-            .sym = .{ .symbol = 17, .code_bits = 3, .kind = .literal },
+            .code = 0b110_0000,
+            .sym = .{ .symbol = 17, .code_bits = 3 },
         },
         .{
             .code = 0b1110_000,
-            .sym = .{ .symbol = 0, .code_bits = 3, .kind = .literal },
+            .sym = .{ .symbol = 0, .code_bits = 4 },
         },
         .{
             .code = 0b1111_000,
-            .sym = .{ .symbol = 16, .code_bits = 3, .kind = .literal },
+            .sym = .{ .symbol = 16, .code_bits = 4 },
         },
     };
 
-    for (data, 12..) |d, i| {
-        try testing.expectEqual(d.sym.symbol, h.symbols[i].symbol);
-        const sym_from_code = h.find(d.code);
-        try testing.expectEqual(d.sym.symbol, sym_from_code.symbol);
+    // unused symbols
+    for (0..12) |i| {
+        try testing.expectEqual(0, h.symbols[i].code_bits);
+    }
+    // used, from index 12
+    for (expected, 12..) |e, i| {
+        try testing.expectEqual(e.sym.symbol, h.symbols[i].symbol);
+        try testing.expectEqual(e.sym.code_bits, h.symbols[i].code_bits);
+        const sym_from_code = h.find(e.code);
+        try testing.expectEqual(e.sym.symbol, sym_from_code.symbol);
     }
 
     // All possible codes for each symbol.
     // Lookup table has 126 elements, to cover all possible 7 bit codes.
     for (0b0000_000..0b0100_000) |c| // 0..32 (32)
-        try testing.expectEqual(@as(u16, 3), h.find(@intCast(c)).symbol);
+        try testing.expectEqual(3, h.find(@intCast(c)).symbol);
 
     for (0b0100_000..0b1000_000) |c| // 32..64 (32)
-        try testing.expectEqual(@as(u16, 18), h.find(@intCast(c)).symbol);
+        try testing.expectEqual(18, h.find(@intCast(c)).symbol);
 
     for (0b1000_000..0b1010_000) |c| // 64..80 (16)
-        try testing.expectEqual(@as(u16, 1), h.find(@intCast(c)).symbol);
+        try testing.expectEqual(1, h.find(@intCast(c)).symbol);
 
     for (0b1010_000..0b1100_000) |c| // 80..96 (16)
-        try testing.expectEqual(@as(u16, 4), h.find(@intCast(c)).symbol);
+        try testing.expectEqual(4, h.find(@intCast(c)).symbol);
 
     for (0b1100_000..0b1110_000) |c| // 96..112 (16)
-        try testing.expectEqual(@as(u16, 17), h.find(@intCast(c)).symbol);
+        try testing.expectEqual(17, h.find(@intCast(c)).symbol);
 
     for (0b1110_000..0b1111_000) |c| // 112..120 (8)
-        try testing.expectEqual(@as(u16, 0), h.find(@intCast(c)).symbol);
+        try testing.expectEqual(0, h.find(@intCast(c)).symbol);
 
     for (0b1111_000..0b1_0000_000) |c| // 120...128 (8)
-        try testing.expectEqual(@as(u16, 16), h.find(@intCast(c)).symbol);
+        try testing.expectEqual(16, h.find(@intCast(c)).symbol);
 }
