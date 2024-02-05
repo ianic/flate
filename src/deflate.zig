@@ -7,7 +7,7 @@ const print = std.debug.print;
 
 const Token = @import("Token.zig");
 const consts = @import("consts.zig");
-const hbw = @import("huffman_bit_writer.zig");
+const BlockWriter = @import("block_writer.zig").BlockWriter;
 const Container = @import("container.zig").Container;
 
 pub const Level = enum(u4) {
@@ -55,7 +55,7 @@ pub fn compressor(comptime container: Container, writer: anytype, level: Level) 
 }
 
 pub fn Compressor(comptime container: Container, comptime WriterType: type) type {
-    const TokenWriterType = hbw.HuffmanBitWriter(WriterType);
+    const TokenWriterType = BlockWriter(WriterType);
     return Deflate(container, WriterType, TokenWriterType);
 }
 
@@ -76,13 +76,13 @@ pub fn Compressor(comptime container: Container, comptime WriterType: type) type
 // They all share same deflate body. Raw has no header or footer just deflate
 // body.
 //
-fn Deflate(comptime container: Container, comptime WriterType: type, comptime TokenWriter: type) type {
+fn Deflate(comptime container: Container, comptime WriterType: type, comptime BlockWriterType: type) type {
     return struct {
         lookup: Lookup = .{},
         win: Window = .{},
         tokens: Tokens = .{},
         wrt: WriterType,
-        token_writer: TokenWriter,
+        block_writer: BlockWriterType,
         level: LevelArgs,
         hasher: container.Hasher() = .{},
 
@@ -95,7 +95,7 @@ fn Deflate(comptime container: Container, comptime WriterType: type, comptime To
         pub fn init(wrt: WriterType, level: Level) !Self {
             const self = Self{
                 .wrt = wrt,
-                .token_writer = TokenWriter.init(wrt),
+                .block_writer = BlockWriterType.init(wrt),
                 .level = LevelArgs.get(level),
             };
             try container.writeHeader(self.wrt);
@@ -222,8 +222,8 @@ fn Deflate(comptime container: Container, comptime WriterType: type, comptime To
         }
 
         fn flushTokens(self: *Self, final: bool) !void {
-            try self.token_writer.writeBlock(self.tokens.tokens(), final, self.win.tokensBuffer());
-            try self.token_writer.flush();
+            try self.block_writer.writeBlock(self.tokens.tokens(), final, self.win.tokensBuffer());
+            try self.block_writer.flush();
             self.tokens.reset();
             self.win.flushed();
         }
@@ -247,7 +247,7 @@ fn Deflate(comptime container: Container, comptime WriterType: type, comptime To
         }
 
         pub fn setWriter(self: *Self, new_writer: WriterType) void {
-            self.token_writer.setWriter(new_writer);
+            self.block_writer.setWriter(new_writer);
             self.wrt = new_writer;
         }
 
@@ -276,7 +276,7 @@ fn Deflate(comptime container: Container, comptime WriterType: type, comptime To
         // Writer interface
 
         pub const Writer = io.Writer(*Self, Error, write);
-        pub const Error = TokenWriter.Error;
+        pub const Error = BlockWriterType.Error;
 
         // Write `input` of uncompressed data.
         pub fn write(self: *Self, input: []const u8) !usize {
@@ -301,10 +301,10 @@ pub fn huffmanOnlyCompressor(comptime container: Container, writer: anytype) !Hu
 // Creates huffman only deflate blocks. Without LZ77 compression (without
 // finding matches in the history).
 pub fn HuffmanOnlyCompressor(comptime container: Container, comptime WriterType: type) type {
-    const Encoder = hbw.HuffmanBitWriter(WriterType);
+    const BlockWriterType = BlockWriter(WriterType);
     return struct {
         wrt: WriterType,
-        encoder: Encoder,
+        block_writer: BlockWriterType,
         hasher: container.Hasher() = .{},
 
         const Self = @This();
@@ -312,21 +312,21 @@ pub fn HuffmanOnlyCompressor(comptime container: Container, comptime WriterType:
         pub fn init(wrt: WriterType) !Self {
             const self = Self{
                 .wrt = wrt,
-                .encoder = Encoder.init(wrt),
+                .block_writer = BlockWriterType.init(wrt),
             };
             try container.writeHeader(self.wrt);
             return self;
         }
 
         pub fn close(self: *Self) !void {
-            try self.encoder.writeBlockStored("", true);
-            try self.encoder.flush();
+            try self.block_writer.writeBlockStored("", true);
+            try self.block_writer.flush();
             try container.writeFooter(&self.hasher, self.wrt);
         }
 
         pub fn writeBlock(self: *Self, input: []const u8) !void {
             self.hasher.update(input);
-            try self.encoder.writeBlockHuff(false, input);
+            try self.block_writer.writeBlockHuff(false, input);
         }
     };
 }
@@ -362,8 +362,8 @@ test "deflate: tokenization" {
             try df.flush();
 
             // df.token_writer.show();
-            try expect(df.token_writer.pos == c.tokens.len); // number of tokens written
-            try testing.expectEqualSlices(Token, df.token_writer.get(), c.tokens); // tokens match
+            try expect(df.block_writer.pos == c.tokens.len); // number of tokens written
+            try testing.expectEqualSlices(Token, df.block_writer.get(), c.tokens); // tokens match
 
             try testing.expectEqual(container.headerSize(), cw.bytes_written);
             try df.close();
@@ -557,10 +557,10 @@ test "check struct sizes" {
     const window_size = 64 * 1024 + 8 + 8 + 8;
     try expect(@sizeOf(Window) == window_size);
 
-    const Hbw = hbw.HuffmanBitWriter(@TypeOf(io.null_writer));
+    const Bw = BlockWriter(@TypeOf(io.null_writer));
     // huffman bit writer internal: 11480
     const hbw_size = 11472; // 11.2k
-    try expect(@sizeOf(Hbw) == hbw_size);
+    try expect(@sizeOf(Bw) == hbw_size);
 
     //const D = Deflate(Hbw);
     // 404744, 395.26k
@@ -658,7 +658,7 @@ test "deflate file tokenization" {
             try cmp.compress(original.reader());
             try cmp.flush();
             const expected_count = case.tokens_count[i];
-            const actual = cmp.token_writer.tokens_count;
+            const actual = cmp.block_writer.tokens_count;
             if (expected_count == 0) {
                 print("actual token count {d}\n", .{actual});
             } else {
