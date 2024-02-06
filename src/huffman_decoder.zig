@@ -28,7 +28,19 @@ pub const LiteralDecoder = HuffmanDecoder(286, 15, 9);
 pub const DistanceDecoder = HuffmanDecoder(30, 15, 9);
 pub const CodegenDecoder = HuffmanDecoder(19, 7, 0);
 
-/// Creates huffman tree codes from list of code lengths.
+/// Creates huffman tree codes from list of code lengths (in `build`).
+///
+/// `find` then finds symbol for code bits. Code can be any length between 1 and
+/// 15 bits. When calling `find` we don't know how many bits will be used to
+/// find symbol. When symbol is returned it has code_bits field which defines
+/// how much we should advance in bit stream.
+///
+/// Lookup table is used to map 15 bit int to symbol. Same symbol is written
+/// many times in this table; 32K places for 286 (at most) symbols.
+/// Small lookup table is optimization for faster search.
+/// It is variation of the algorithm explained in [zlib](https://github.com/madler/zlib/blob/643e17b7498d12ab8d15565662880579692f769d/doc/algorithm.txt#L92)
+/// with difference that we here use statically allocated arrays.
+///
 fn HuffmanDecoder(
     comptime alphabet_size: u16,
     comptime max_code_bits: u4,

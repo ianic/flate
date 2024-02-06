@@ -9,17 +9,37 @@ const Container = @import("container.zig").Container;
 const Token = @import("Token.zig");
 const codegen_order = @import("consts.zig").huffman.codegen_order;
 
-// Decompresses deflate bit stream `reader` and writes uncompressed data to the
-// `writer` stream.
+/// Decompresses deflate bit stream `reader` and writes uncompressed data to the
+/// `writer` stream.
 pub fn decompress(comptime container: Container, reader: anytype, writer: anytype) !void {
     var d = decompressor(container, reader);
     try d.decompress(writer);
 }
 
+/// Inflate decompressor for the reader type.
 pub fn decompressor(comptime container: Container, reader: anytype) Inflate(container, @TypeOf(reader)) {
     return Inflate(container, @TypeOf(reader)).init(reader);
 }
 
+/// Inflate decompresses deflate bit stream. Reads compressed data from reader
+/// provided in init. Decompressed data are stored in internal hist buffer and
+/// can be accesses iterable `next` or reader interface.
+///
+/// Container defines header/footer wrapper around deflate bit stream. Can be
+/// gzip or zlib.
+///
+/// Deflate bit stream consists of multiple blocks. Block can be one of three types:
+///   * stored, non compressed, max 64k in size
+///   * fixed, huffman codes are predefined
+///   * dynamic, huffman code tables are encoded at the block start
+///
+/// `step` function runs decoder until internal `hist` buffer is full. Client
+/// than needs to read that data in order to proceed with decoding.
+///
+/// Allocates ~200K of internal buffers, most important are:
+///   * 64K for history (CircularBuffer)
+///   * 2 * 64K (2 * 32K of u16) for huffman decoders (Literal and DistanceDecoder)
+///
 pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
     return struct {
         const BitReaderType = BitReader(ReaderType);
@@ -310,9 +330,6 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
     };
 }
 
-// Allocates ~200K of internal buffers, most important are:
-//   - 64K for sliding window
-//   - 64K (2 * 32K of u16) for huffman codes
 test "Struct sizes" {
     var fbs = std.io.fixedBufferStream("");
     const ReaderType = @TypeOf(fbs.reader());
