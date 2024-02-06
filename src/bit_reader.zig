@@ -6,7 +6,15 @@ pub fn bitReader(reader: anytype) BitReader(@TypeOf(reader)) {
     return BitReader(@TypeOf(reader)).init(reader);
 }
 
-/// Bit reader used during inflate.
+/// Bit reader used during inflate (decompression). Has internal buffer of 64
+/// bits which shifts right after bits are consumed. Uses forward_reader to fill
+/// that internal buffer when needed.
+///
+/// readF is the core function. Supports few different ways of getting bits
+/// controlled by flags. In hot path we try to avoid checking whether we need to
+/// fill buffer from forward_reader by calling fill in advance and readF with
+/// buffered flag set.
+///
 pub fn BitReader(comptime ReaderType: type) type {
     return struct {
         // Underlying reader used for filling internal bits buffer

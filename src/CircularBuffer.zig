@@ -1,19 +1,22 @@
-const std = @import("std");
-const assert = std.debug.assert;
-const testing = std.testing;
-
-/// Sliding window of decoded data. Or maybe better described as circular buffer.
-/// Contains 64K bytes. Deflate limits:
+/// 64K buffer of uncompressed data created in inflate (decompression). Has enough
+/// history to support writing match<length, distance>; copying length of bytes
+/// from the position distance backward from current.
+///
+/// Reads can return less than available bytes if they are spread across
+/// different circles. So reads should repeat until get required number of bytes
+/// or until returned slice is zero length.
+///
+/// Note on deflate limits:
 ///  * non-compressible block is limited to 65,535 bytes.
 ///  * backward pointer is limited in distance to 32K bytes and in length to 258 bytes.
 ///
 /// Whole non-compressed block can be written without overlap. We always have
 /// history of up to 64K, more then 32K needed.
 ///
-/// Reads can return less than available bytes if they are spread across
-/// different circles. So reads should repeat until get required number of bytes
-/// or until returned slice is zero length.
-///
+const std = @import("std");
+const assert = std.debug.assert;
+const testing = std.testing;
+
 const mask = 0xffff; // 64K - 1
 const buffer_len = mask + 1; // 64K buffer
 
@@ -34,7 +37,7 @@ pub inline fn write(self: *Self, b: u8) void {
     self.wp += 1;
 }
 
-// Write match (backreference to the same data slice) starting at `distance`
+// Write match (back-reference to the same data slice) starting at `distance`
 // back from current write position, and `length` of bytes.
 pub fn writeMatch(self: *Self, length: u16, distance: u16) void {
     assert(self.wp - self.rp < mask);
@@ -64,7 +67,7 @@ pub fn writeMatch(self: *Self, length: u16, distance: u16) void {
     }
 }
 
-// Retruns writable part of the internal buffer of size `n` at most. Advanjces
+// Returns writable part of the internal buffer of size `n` at most. Advances
 // write pointer, assumes that returned buffer will be filled with data.
 pub fn getWritable(self: *Self, n: usize) []u8 {
     const wp = self.wp & mask;
@@ -111,6 +114,12 @@ inline fn readBlock(self: *Self, max: usize) ReadBlock {
 // Number of free bytes for write.
 pub inline fn free(self: *Self) usize {
     return buffer_len - (self.wp - self.rp);
+}
+
+// Full if largest match can't fit. 258 is largest match length. That much bytes
+// can be produced in single decode step.
+pub inline fn full(self: *Self) bool {
+    return self.free() < 258 + 1;
 }
 
 // example from: https://youtu.be/SJPvNi4HrWQ?t=3558

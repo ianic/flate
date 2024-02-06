@@ -1,6 +1,12 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
+/// Bit writer for use in deflate (compression).
+///
+/// Has internal bits buffer of 64 bits and internal bytes buffer of 248 bytes.
+/// When we accumulate 48 bits 6 bytes are moved to the bytes buffer. When we
+/// accumulate 240 bytes they are flushed to the underlying inner_writer.
+///
 pub fn BitWriter(comptime WriterType: type) type {
     // buffer_flush_size indicates the buffer size
     // after which bytes are flushed to the writer.

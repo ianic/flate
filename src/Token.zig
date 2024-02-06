@@ -1,6 +1,114 @@
+/// Token cat be literal: single byte of data or match; reference to the slice of
+/// data in the same stream represented with <length, distance>. Where length
+/// can be 3 - 258 bytes, and distance 1 - 32768 bytes.
+///
 const std = @import("std");
 const assert = std.debug.assert;
+const print = std.debug.print;
+const expect = std.testing.expect;
 const consts = @import("consts.zig").match;
+
+const Token = @This();
+
+pub const Kind = enum(u1) {
+    literal,
+    match,
+};
+
+// Distance range 1 - 32768, stored in dist as 0 - 32767 (fits u15)
+dist: u15 = 0,
+// Length range 3 - 258, stored in len_lit as 0 - 255 (fits u8)
+len_lit: u8 = 0,
+kind: Kind = .literal,
+
+pub fn literal(t: Token) u8 {
+    return t.len_lit;
+}
+
+pub fn distance(t: Token) u16 {
+    return @as(u16, t.dist) + consts.min_distance;
+}
+
+pub fn length(t: Token) u16 {
+    return @as(u16, t.len_lit) + consts.base_length;
+}
+
+pub fn initLiteral(lit: u8) Token {
+    return .{ .kind = .literal, .len_lit = lit };
+}
+
+// distance range 1 - 32768, stored in dist as 0 - 32767 (u15)
+// length range 3 - 258, stored in len_lit as 0 - 255 (u8)
+pub fn initMatch(dist: u16, len: u16) Token {
+    assert(len >= consts.min_length and len <= consts.max_length);
+    assert(dist >= consts.min_distance and dist <= consts.max_distance);
+    return .{
+        .kind = .match,
+        .dist = @intCast(dist - consts.min_distance),
+        .len_lit = @intCast(len - consts.base_length),
+    };
+}
+
+pub fn eql(t: Token, o: Token) bool {
+    return t.kind == o.kind and
+        t.dist == o.dist and
+        t.len_lit == o.len_lit;
+}
+
+pub fn lengthCode(t: Token) u16 {
+    return match_lengths[match_lengths_index[t.len_lit]].code;
+}
+
+pub fn lengthEncoding(t: Token) MatchLength {
+    var c = match_lengths[match_lengths_index[t.len_lit]];
+    c.extra_length = t.len_lit - c.base_scaled;
+    return c;
+}
+
+// Returns the distance code corresponding to a specific distance.
+// Distance code is in range: 0 - 29.
+pub fn distanceCode(t: Token) u8 {
+    var dist: u16 = t.dist;
+    if (dist < match_distances_index.len) {
+        return match_distances_index[dist];
+    }
+    dist >>= 7;
+    if (dist < match_distances_index.len) {
+        return match_distances_index[dist] + 14;
+    }
+    dist >>= 7;
+    return match_distances_index[dist] + 28;
+}
+
+pub fn distanceEncoding(t: Token) MatchDistance {
+    var c = match_distances[t.distanceCode()];
+    c.extra_distance = t.dist - c.base_scaled;
+    return c;
+}
+
+pub fn lengthExtraBits(code: u32) u8 {
+    return match_lengths[code - length_codes_start].extra_bits;
+}
+
+pub fn matchLength(code: u8) MatchLength {
+    return match_lengths[code];
+}
+
+pub fn matchDistance(code: u8) MatchDistance {
+    return match_distances[code];
+}
+
+pub fn distanceExtraBits(code: u32) u8 {
+    return match_distances[code].extra_bits;
+}
+
+pub fn show(t: Token) void {
+    if (t.kind == .literal) {
+        print("L('{c}'), ", .{t.literal()});
+    } else {
+        print("M({d}, {d}), ", .{ t.distance(), t.length() });
+    }
+}
 
 // Retruns index in match_lengths table for each length in range 0-255.
 const match_lengths_index = [_]u8{
@@ -166,111 +274,6 @@ const match_distances = [_]MatchDistance{
     .{ .extra_bits = 13, .base_scaled = 0x4000, .code = 28, .base = 16385 },
     .{ .extra_bits = 13, .base_scaled = 0x6000, .code = 29, .base = 24577 },
 };
-
-const Token = @This();
-
-pub const Kind = enum(u1) {
-    literal,
-    match,
-};
-
-// distance range 1 - 32768, stored in dist as 0 - 32767 (u15)
-dist: u15 = 0,
-// length range 3 - 258, stored in len_lit as 0 - 255 (u8)
-len_lit: u8 = 0,
-kind: Kind = .literal,
-
-pub fn literal(t: Token) u8 {
-    return t.len_lit;
-}
-
-pub fn distance(t: Token) u16 {
-    return @as(u16, t.dist) + consts.min_distance;
-}
-
-pub fn length(t: Token) u16 {
-    return @as(u16, t.len_lit) + consts.base_length;
-}
-
-pub fn initLiteral(lit: u8) Token {
-    return .{ .kind = .literal, .len_lit = lit };
-}
-
-// distance range 1 - 32768, stored in dist as 0 - 32767 (u15)
-// length range 3 - 258, stored in len_lit as 0 - 255 (u8)
-pub fn initMatch(dist: u16, len: u16) Token {
-    assert(len >= consts.min_length and len <= consts.max_length);
-    assert(dist >= consts.min_distance and dist <= consts.max_distance);
-    return .{
-        .kind = .match,
-        .dist = @intCast(dist - consts.min_distance),
-        .len_lit = @intCast(len - consts.base_length),
-    };
-}
-
-pub fn eql(t: Token, o: Token) bool {
-    return t.kind == o.kind and
-        t.dist == o.dist and
-        t.len_lit == o.len_lit;
-}
-
-pub fn lengthCode(t: Token) u16 {
-    return match_lengths[match_lengths_index[t.len_lit]].code;
-}
-
-pub fn lengthEncoding(t: Token) MatchLength {
-    var c = match_lengths[match_lengths_index[t.len_lit]];
-    c.extra_length = t.len_lit - c.base_scaled;
-    return c;
-}
-
-// Returns the distance code corresponding to a specific distance.
-// Distance code is in range: 0 - 29.
-pub fn distanceCode(t: Token) u8 {
-    var dist: u16 = t.dist;
-    if (dist < match_distances_index.len) {
-        return match_distances_index[dist];
-    }
-    dist >>= 7;
-    if (dist < match_distances_index.len) {
-        return match_distances_index[dist] + 14;
-    }
-    dist >>= 7;
-    return match_distances_index[dist] + 28;
-}
-
-pub fn distanceEncoding(t: Token) MatchDistance {
-    var c = match_distances[t.distanceCode()];
-    c.extra_distance = t.dist - c.base_scaled;
-    return c;
-}
-
-pub fn lengthExtraBits(code: u32) u8 {
-    return match_lengths[code - length_codes_start].extra_bits;
-}
-
-pub fn matchLength(code: u8) MatchLength {
-    return match_lengths[code];
-}
-
-pub fn matchDistance(code: u8) MatchDistance {
-    return match_distances[code];
-}
-
-pub fn distanceExtraBits(code: u32) u8 {
-    return match_distances[code].extra_bits;
-}
-
-pub fn show(t: Token) void {
-    if (t.kind == .literal) {
-        print("L('{c}'), ", .{t.literal()});
-    } else {
-        print("M({d}, {d}), ", .{ t.distance(), t.length() });
-    }
-}
-
-const print = std.debug.print;
-const expect = std.testing.expect;
 
 test "Token size" {
     try expect(@sizeOf(Token) == 4);

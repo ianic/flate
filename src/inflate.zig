@@ -60,12 +60,6 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
             return .{ .bits = BitReaderType.init(rt) };
         }
 
-        inline fn histFull(self: *Self) bool {
-            // 258 is largest match length. That much bytes can be produced in
-            // single decode step.
-            return self.hist.free() < 258 + 1;
-        }
-
         fn blockHeader(self: *Self) !void {
             self.bfinal = try self.bits.read(u1);
             self.block_type = try self.bits.read(u2);
@@ -86,7 +80,7 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
         }
 
         fn fixedBlock(self: *Self) !bool {
-            while (!self.histFull()) {
+            while (!self.hist.full()) {
                 const code = try self.bits.readFixedCode();
                 switch (code) {
                     0...255 => self.hist.write(@intCast(code)),
@@ -160,8 +154,8 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
             self.dst_h.build(&dst_l);
         }
 
-        // Decode code length symbol to code length. Writes decoded lendth into
-        // lens slice starting at position pos. Returns number of postitions
+        // Decode code length symbol to code length. Writes decoded length into
+        // lens slice starting at position pos. Returns number of positions
         // advanced.
         fn dynamicCodeLength(self: *Self, code: u16, lens: []u4, pos: usize) !usize {
             assert(code <= 18);
@@ -188,8 +182,11 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
             }
         }
 
+        // In larger archives most blocks are usually dynamic, so decompression
+        // performance depends on this function.
         fn dynamicBlock(self: *Self) !bool {
-            while (!self.histFull()) {
+            // Hot path loop!
+            while (!self.hist.full()) {
                 try self.bits.fill(15); // optimization so other bit reads can be buffered (avoiding one `if` in hot path)
                 const sym = try self.decodeSymbol(&self.lit_h);
 

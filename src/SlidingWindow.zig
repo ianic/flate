@@ -1,11 +1,12 @@
+/// Used in deflate (compression), holds uncompressed data form which Tokens are
+/// produces. In combination with Lookup it is used to find matches in history data.
+///
 const std = @import("std");
 const consts = @import("consts.zig");
 
 const expect = testing.expect;
 const assert = std.debug.assert;
 const testing = std.testing;
-
-// Buffer of history data.
 
 const hist_len = consts.history.len;
 const buffer_len = 2 * hist_len;
@@ -17,7 +18,7 @@ const Self = @This();
 buffer: [buffer_len]u8 = undefined,
 wp: usize = 0, // write position
 rp: usize = 0, // read position
-fp: isize = 0, // flush position, tokens are build from fp..rp
+fp: isize = 0, // last flush position, tokens are build from fp..rp
 
 // Returns number of bytes written, or 0 if buffer is full and need to slide.
 pub fn write(self: *Self, buf: []const u8) usize {
@@ -30,7 +31,7 @@ pub fn write(self: *Self, buf: []const u8) usize {
 }
 
 // Slide buffer for hist_len.
-// Drops old history, preserves bwtween hist_len and hist_len - min_lookahead.
+// Drops old history, preserves between hist_len and hist_len - min_lookahead.
 // Returns number of bytes removed.
 pub fn slide(self: *Self) u16 {
     assert(self.rp >= max_rp and self.wp >= self.rp);
@@ -42,34 +43,41 @@ pub fn slide(self: *Self) u16 {
     return @intCast(n);
 }
 
-// flush - process all data from window
-// If not flush preserve enough data for the loghest match.
-// Returns null if there is not enough data.
-pub fn activeLookahead(self: *Self, flush: bool) ?[]const u8 {
-    const min: usize = if (flush) 0 else min_lookahead;
-    const lh = self.lookahead();
-    return if (lh.len > min) lh else null;
-}
-
-pub inline fn lookahead(self: *Self) []const u8 {
+// Data from the current position (read position). Those part of the buffer is
+// not converted to tokens yet.
+inline fn lookahead(self: *Self) []const u8 {
     assert(self.wp >= self.rp);
     return self.buffer[self.rp..self.wp];
 }
 
-pub fn writable(self: *Self) []u8 {
-    return self.buffer[self.wp..];
+// Returns part of the lookahead buffer. If should_flush is set no lookahead is
+// preserved otherwise preserves enough data for the longest match. Returns
+// null if there is not enough data.
+pub fn activeLookahead(self: *Self, should_flush: bool) ?[]const u8 {
+    const min: usize = if (should_flush) 0 else min_lookahead;
+    const lh = self.lookahead();
+    return if (lh.len > min) lh else null;
 }
 
-pub fn written(self: *Self, n: usize) void {
-    self.wp += n;
-}
-
+// Advances read position, shrinks lookahead.
 pub fn advance(self: *Self, n: u16) void {
     assert(self.wp >= self.rp + n);
     self.rp += n;
 }
 
+// Returns writable part of the buffer, where new uncompressed data can be
+// written.
+pub fn writable(self: *Self) []u8 {
+    return self.buffer[self.wp..];
+}
+
+// Notification of what part of writable buffer is filled with data.
+pub fn written(self: *Self, n: usize) void {
+    self.wp += n;
+}
+
 // Finds match length between previous and current position.
+// Used in hot path!
 pub fn match(self: *Self, prev_pos: u16, curr_pos: u16, min_len: u16) u16 {
     const max_len: usize = @min(self.wp - curr_pos, consts.match.max_length);
     // lookahead buffers from previous and current positions
@@ -95,14 +103,19 @@ pub fn match(self: *Self, prev_pos: u16, curr_pos: u16, min_len: u16) u16 {
     return if (i >= consts.match.min_length) @intCast(i) else 0;
 }
 
+// Current position of non-compressed data. Data before rp are already converted
+// to tokens.
 pub fn pos(self: *Self) u16 {
     return @intCast(self.rp);
 }
 
-pub fn flushed(self: *Self) void {
+// Notification that token list is cleared.
+pub fn flush(self: *Self) void {
     self.fp = @intCast(self.rp);
 }
 
+// Part of the buffer since last flush or null if there was slide in between (so
+// fp becomes negative).
 pub fn tokensBuffer(self: *Self) ?[]const u8 {
     assert(self.fp <= self.rp);
     if (self.fp < 0) return null;
