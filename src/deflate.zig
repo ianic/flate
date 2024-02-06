@@ -9,6 +9,8 @@ const Token = @import("Token.zig");
 const consts = @import("consts.zig");
 const BlockWriter = @import("block_writer.zig").BlockWriter;
 const Container = @import("container.zig").Container;
+const SlidingWindow = @import("SlidingWindow.zig");
+const Lookup = @import("Lookup.zig");
 
 pub const Level = enum(u4) {
     // zig fmt: off
@@ -79,7 +81,7 @@ pub fn Compressor(comptime container: Container, comptime WriterType: type) type
 fn Deflate(comptime container: Container, comptime WriterType: type, comptime BlockWriterType: type) type {
     return struct {
         lookup: Lookup = .{},
-        win: Window = .{},
+        win: SlidingWindow = .{},
         tokens: Tokens = .{},
         wrt: WriterType,
         block_writer: BlockWriterType,
@@ -291,6 +293,29 @@ fn Deflate(comptime container: Container, comptime WriterType: type, comptime Bl
     };
 }
 
+// Tokens store
+const Tokens = struct {
+    list: [consts.deflate.tokens]Token = undefined,
+    pos: usize = 0,
+
+    fn add(self: *Tokens, t: Token) void {
+        self.list[self.pos] = t;
+        self.pos += 1;
+    }
+
+    fn full(self: *Tokens) bool {
+        return self.pos == self.list.len;
+    }
+
+    fn reset(self: *Tokens) void {
+        self.pos = 0;
+    }
+
+    fn tokens(self: *Tokens) []const Token {
+        return self.list[0..self.pos];
+    }
+};
+
 pub fn huffmanOnlyCompressor(comptime container: Container, writer: anytype) !HuffmanOnlyCompressor(
     container,
     @TypeOf(writer),
@@ -403,146 +428,6 @@ const TestTokenWriter = struct {
     pub fn flush(_: *Self) !void {}
 };
 
-// Buffer of history data.
-const Window = struct {
-    const hist_len = consts.history.len;
-    const buffer_len = 2 * hist_len;
-    const min_lookahead = consts.match.min_length + consts.match.max_length;
-    const max_rp = buffer_len - min_lookahead;
-
-    buffer: [buffer_len]u8 = undefined,
-    wp: usize = 0, // write position
-    rp: usize = 0, // read position
-    fp: isize = 0, // flush position, tokens are build from fp..rp
-
-    // Returns number of bytes written, or 0 if buffer is full and need to slide.
-    pub fn write(self: *Window, buf: []const u8) usize {
-        if (self.rp >= max_rp) return 0; // need to slide
-
-        const n = @min(buf.len, buffer_len - self.wp);
-        @memcpy(self.buffer[self.wp .. self.wp + n], buf[0..n]);
-        self.wp += n;
-        return n;
-    }
-
-    // Slide buffer for hist_len.
-    // Drops old history, preserves bwtween hist_len and hist_len - min_lookahead.
-    // Returns number of bytes removed.
-    pub fn slide(self: *Window) u16 {
-        assert(self.rp >= max_rp and self.wp >= self.rp);
-        const n = self.wp - hist_len;
-        @memcpy(self.buffer[0..n], self.buffer[hist_len..self.wp]);
-        self.rp -= hist_len;
-        self.wp -= hist_len;
-        self.fp -= hist_len;
-        return @intCast(n);
-    }
-
-    // flush - process all data from window
-    // If not flush preserve enough data for the loghest match.
-    // Returns null if there is not enough data.
-    pub fn activeLookahead(self: *Window, flush: bool) ?[]const u8 {
-        const min: usize = if (flush) 0 else min_lookahead;
-        const lh = self.lookahead();
-        return if (lh.len > min) lh else null;
-    }
-
-    pub inline fn lookahead(self: *Window) []const u8 {
-        assert(self.wp >= self.rp);
-        return self.buffer[self.rp..self.wp];
-    }
-
-    pub fn writable(self: *Window) []u8 {
-        return self.buffer[self.wp..];
-    }
-
-    pub fn written(self: *Window, n: usize) void {
-        self.wp += n;
-    }
-
-    pub fn advance(self: *Window, n: u16) void {
-        assert(self.wp >= self.rp + n);
-        self.rp += n;
-    }
-
-    // Finds match length between previous and current position.
-    pub fn match(self: *Window, prev_pos: u16, curr_pos: u16, min_len: u16) u16 {
-        const max_len: usize = @min(self.wp - curr_pos, consts.match.max_length);
-        // lookahead buffers from previous and current positions
-        const prev_lh = self.buffer[prev_pos..][0..max_len];
-        const curr_lh = self.buffer[curr_pos..][0..max_len];
-
-        // If we alread have match (min_len > 0),
-        // test the first byte above previous len a[min_len] != b[min_len]
-        // and then all the bytes from that position to zero.
-        // That is likely positions to find difference than looping from first bytes.
-        var i: usize = min_len;
-        if (i > 0) {
-            if (max_len <= i) return 0;
-            while (true) {
-                if (prev_lh[i] != curr_lh[i]) return 0;
-                if (i == 0) break;
-                i -= 1;
-            }
-            i = min_len;
-        }
-        while (i < max_len) : (i += 1)
-            if (prev_lh[i] != curr_lh[i]) break;
-        return if (i >= consts.match.min_length) @intCast(i) else 0;
-    }
-
-    pub fn pos(self: *Window) u16 {
-        return @intCast(self.rp);
-    }
-
-    pub fn flushed(self: *Window) void {
-        self.fp = @intCast(self.rp);
-    }
-
-    pub fn tokensBuffer(self: *Window) ?[]const u8 {
-        assert(self.fp <= self.rp);
-        if (self.fp < 0) return null;
-        return self.buffer[@intCast(self.fp)..self.rp];
-    }
-};
-
-test "Window match" {
-    const data = "Blah blah blah blah blah!";
-    var win: Window = .{};
-    try expect(win.write(data) == data.len);
-    try expect(win.wp == data.len);
-    try expect(win.rp == 0);
-
-    // length between l symbols
-    try expect(win.match(1, 6, 0) == 18);
-    try expect(win.match(1, 11, 0) == 13);
-    try expect(win.match(1, 16, 0) == 8);
-    try expect(win.match(1, 21, 0) == 0);
-
-    // position 15 = "blah blah!"
-    // position 20 = "blah!"
-    try expect(win.match(15, 20, 0) == 4);
-    try expect(win.match(15, 20, 3) == 4);
-    try expect(win.match(15, 20, 4) == 0);
-}
-
-test "Window slide" {
-    var win: Window = .{};
-    win.wp = Window.buffer_len - 11;
-    win.rp = Window.buffer_len - 111;
-    win.buffer[win.rp] = 0xab;
-    try expect(win.lookahead().len == 100);
-    try expect(win.tokensBuffer().?.len == win.rp);
-
-    const n = win.slide();
-    try expect(n == 32757);
-    try expect(win.buffer[win.rp] == 0xab);
-    try expect(win.rp == Window.hist_len - 111);
-    try expect(win.wp == Window.hist_len - 11);
-    try expect(win.lookahead().len == 100);
-    try expect(win.tokensBuffer() == null);
-}
-
 test "check struct sizes" {
     try expect(@sizeOf(Token) == 4);
 
@@ -556,7 +441,7 @@ test "check struct sizes" {
 
     // buffer: (32k * 2), wp: 8, rp: 8, fp: 8
     const window_size = 64 * 1024 + 8 + 8 + 8;
-    try expect(@sizeOf(Window) == window_size);
+    try expect(@sizeOf(SlidingWindow) == window_size);
 
     const Bw = BlockWriter(@TypeOf(io.null_writer));
     // huffman bit writer internal: 11480
@@ -578,38 +463,6 @@ test "check struct sizes" {
     // var cmp = try std.compress.deflate.compressor(allocator, io.null_writer, .{});
     // defer cmp.deinit();
 }
-
-// Tokens store
-const Tokens = struct {
-    list: [consts.deflate.tokens]Token = undefined,
-    pos: usize = 0,
-
-    fn add(self: *Tokens, t: Token) void {
-        self.list[self.pos] = t;
-        self.pos += 1;
-    }
-
-    fn len(self: *Tokens) usize {
-        return self.pos;
-    }
-
-    fn full(self: *Tokens) bool {
-        return self.pos == consts.deflate.tokens;
-    }
-
-    fn reset(self: *Tokens) void {
-        self.pos = 0;
-    }
-
-    fn at(self: *Tokens, n: usize) Token {
-        assert(n < self.pos);
-        return self.list[n];
-    }
-
-    fn tokens(self: *Tokens) []const Token {
-        return self.list[0..self.pos];
-    }
-};
 
 test "deflate file tokenization" {
     const levels = [_]Level{ .level_4, .level_5, .level_6, .level_7, .level_8, .level_9 };
@@ -708,120 +561,4 @@ fn TokenDecoder(comptime WriterType: type) type {
 
         pub fn flush(_: *Self) !void {}
     };
-}
-
-const Lookup = struct {
-    const prime4 = 0x9E3779B1; // 4 bytes prime number 2654435761
-    const chain_len = Window.buffer_len;
-
-    // hash => location lookup
-    head: [consts.lookup.len]u16 = [_]u16{0} ** consts.lookup.len,
-    // location => prev location for the same hash value
-    chain: [chain_len]u16 = [_]u16{0} ** (chain_len),
-
-    // Calculates hash of the 4 bytes from data.
-    // Inserts idx location of that hash in the lookup tables.
-    // Resturns previous location with the same hash value.
-    pub fn add(self: *Lookup, data: []const u8, idx: u16) u16 {
-        if (data.len < 4) return 0;
-        const h = hash(data[0..4]);
-        return self.set(h, idx);
-    }
-
-    // Previous location with the same hash value.
-    pub inline fn prev(self: *Lookup, idx: u16) u16 {
-        return self.chain[idx];
-    }
-
-    inline fn set(self: *Lookup, h: u32, idx: u16) u16 {
-        const p = self.head[h];
-        self.head[h] = idx;
-        self.chain[idx] = p;
-        return p;
-    }
-
-    // Slide all positions in head and chain for n.
-    pub fn slide(self: *Lookup, n: u16) void {
-        for (&self.head) |*v| {
-            v.* -|= n;
-        }
-        var i: usize = 0;
-        while (i < n) : (i += 1) {
-            self.chain[i] = self.chain[i + n] -| n;
-        }
-    }
-
-    // Add `len` 4 bytes hashes from `data` into lookup.
-    // Position of the first byte is `idx`.
-    pub fn bulkAdd(self: *Lookup, data: []const u8, len: u16, idx: u16) void {
-        if (len == 0 or data.len < consts.match.min_length) {
-            return;
-        }
-        var hb =
-            @as(u32, data[3]) |
-            @as(u32, data[2]) << 8 |
-            @as(u32, data[1]) << 16 |
-            @as(u32, data[0]) << 24;
-        _ = self.set(hashu(hb), idx);
-
-        var i = idx;
-        for (4..@min(len + 3, data.len)) |j| {
-            hb = (hb << 8) | @as(u32, data[j]);
-            i += 1;
-            _ = self.set(hashu(hb), i);
-        }
-    }
-
-    // Calculates hash of the first 4 bytes of `b`.
-    inline fn hash(b: *const [4]u8) u32 {
-        return hashu(@as(u32, b[3]) |
-            @as(u32, b[2]) << 8 |
-            @as(u32, b[1]) << 16 |
-            @as(u32, b[0]) << 24);
-    }
-
-    inline fn hashu(v: u32) u32 {
-        return @intCast((v *% prime4) >> consts.lookup.shift);
-    }
-};
-
-test "Lookup add/prev" {
-    const data = [_]u8{
-        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-        0x01, 0x02, 0x03,
-    };
-
-    var h: Lookup = .{};
-    for (data, 0..) |_, i| {
-        const prev = h.add(data[i..], @intCast(i));
-        if (i >= 8 and i < 24) {
-            try expect(prev == i - 8);
-        } else {
-            try expect(prev == 0);
-        }
-    }
-
-    const v = Lookup.hash(data[2 .. 2 + 4]);
-    try expect(h.head[v] == 2 + 16);
-    try expect(h.chain[2 + 16] == 2 + 8);
-    try expect(h.chain[2 + 8] == 2);
-}
-
-test "Lookup bulkAdd" {
-    const data = "Lorem ipsum dolor sit amet, consectetur adipiscing elit.";
-
-    // one by one
-    var h: Lookup = .{};
-    for (data, 0..) |_, i| {
-        _ = h.add(data[i..], @intCast(i));
-    }
-
-    // in bulk
-    var bh: Lookup = .{};
-    bh.bulkAdd(data, data.len, 0);
-
-    try testing.expectEqualSlices(u16, &h.head, &bh.head);
-    try testing.expectEqualSlices(u16, &h.chain, &bh.chain);
 }
