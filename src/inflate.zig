@@ -4,7 +4,7 @@ const testing = std.testing;
 
 const hfd = @import("huffman_decoder.zig");
 const BitReader = @import("bit_reader.zig").BitReader;
-const SlidingWindow = @import("sliding_window.zig").SlidingWindow;
+const CircularBuffer = @import("CircularBuffer.zig");
 const Container = @import("container.zig").Container;
 const Token = @import("Token.zig");
 const codegen_order = @import("consts.zig").huffman.codegen_order;
@@ -26,7 +26,7 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
         const F = BitReaderType.flag;
 
         bits: BitReaderType = .{},
-        win: SlidingWindow = .{},
+        hist: CircularBuffer = .{},
         // Hashes, produces checkusm, of uncompressed data for gzip/zlib footer.
         hasher: container.Hasher() = .{},
 
@@ -60,10 +60,10 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
             return .{ .bits = BitReaderType.init(rt) };
         }
 
-        inline fn windowFull(self: *Self) bool {
+        inline fn histFull(self: *Self) bool {
             // 258 is largest match length. That much bytes can be produced in
             // single decode step.
-            return self.win.free() < 258 + 1;
+            return self.hist.free() < 258 + 1;
         }
 
         fn blockHeader(self: *Self) !void {
@@ -78,7 +78,7 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
             if (len != ~nlen) return error.DeflateWrongNlen;
 
             while (len > 0) {
-                const buf = self.win.getWritable(len);
+                const buf = self.hist.getWritable(len);
                 try self.bits.readAll(buf);
                 len -= @intCast(buf.len);
             }
@@ -86,10 +86,10 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
         }
 
         fn fixedBlock(self: *Self) !bool {
-            while (!self.windowFull()) {
+            while (!self.histFull()) {
                 const code = try self.bits.readFixedCode();
                 switch (code) {
-                    0...255 => self.win.write(@intCast(code)),
+                    0...255 => self.hist.write(@intCast(code)),
                     256 => return true, // end of block
                     257...285 => try self.fixedDistanceCode(@intCast(code - 257)),
                     else => return error.DeflateInvalidCode,
@@ -104,7 +104,7 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
             try self.bits.fill(5 + 5 + 13);
             const length = try self.decodeLength(code);
             const distance = try self.decodeDistance(try self.bits.readF(u5, F.buffered));
-            self.win.writeCopy(length, distance);
+            self.hist.writeMatch(length, distance);
         }
 
         inline fn decodeLength(self: *Self, code: u8) !u16 {
@@ -189,18 +189,18 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
         }
 
         fn dynamicBlock(self: *Self) !bool {
-            while (!self.windowFull()) {
+            while (!self.histFull()) {
                 try self.bits.fill(15); // optimization so other bit reads can be buffered (avoiding one `if` in hot path)
                 const sym = try self.decodeSymbol(&self.lit_h);
 
                 switch (sym.kind) {
-                    .literal => self.win.write(sym.symbol),
+                    .literal => self.hist.write(sym.symbol),
                     .match => { // Decode match backreference <length, distance>
                         try self.bits.fill(5 + 15 + 13); // so we can use buffered reads
                         const length = try self.decodeLength(sym.symbol);
                         const dsm = try self.decodeSymbol(&self.dst_h);
                         const distance = try self.decodeDistance(dsm.symbol);
-                        self.win.writeCopy(length, distance);
+                        self.hist.writeMatch(length, distance);
                     },
                     .end_of_block => return true,
                 }
@@ -284,7 +284,7 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
         /// than 65536 bytes, which is limit of internal buffer.
         pub fn get(self: *Self, limit: usize) Error![]const u8 {
             while (true) {
-                const out = self.win.readAtMost(limit);
+                const out = self.hist.readAtMost(limit);
                 if (out.len > 0) {
                     self.hasher.update(out);
                     return out;
@@ -323,10 +323,10 @@ test "Struct sizes" {
 
     try testing.expectEqual(199352, inflate_size);
     try testing.expectEqual(
-        @sizeOf(SlidingWindow) + @sizeOf(hfd.LiteralDecoder) + @sizeOf(hfd.DistanceDecoder) + 48,
+        @sizeOf(CircularBuffer) + @sizeOf(hfd.LiteralDecoder) + @sizeOf(hfd.DistanceDecoder) + 48,
         inflate_size,
     );
-    try testing.expectEqual(65536 + 8 + 8, @sizeOf(SlidingWindow));
+    try testing.expectEqual(65536 + 8 + 8, @sizeOf(CircularBuffer));
     try testing.expectEqual(8, @sizeOf(Container.raw.Hasher()));
     try testing.expectEqual(24, @sizeOf(BitReader(ReaderType)));
     try testing.expectEqual(67132, @sizeOf(hfd.LiteralDecoder));

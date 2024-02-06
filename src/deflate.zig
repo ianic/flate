@@ -298,8 +298,8 @@ pub fn huffmanOnlyCompressor(comptime container: Container, writer: anytype) !Hu
     return try HuffmanOnlyCompressor(container, @TypeOf(writer)).init(writer);
 }
 
-// Creates huffman only deflate blocks. Without LZ77 compression (without
-// finding matches in the history).
+// Creates huffman only deflate blocks. Disables Lempel-Ziv match searching and
+// only performs Huffman entropy encoding.
 pub fn HuffmanOnlyCompressor(comptime container: Container, comptime WriterType: type) type {
     const BlockWriterType = BlockWriter(WriterType);
     return struct {
@@ -403,6 +403,7 @@ const TestTokenWriter = struct {
     pub fn flush(_: *Self) !void {}
 };
 
+// Buffer of history data.
 const Window = struct {
     const hist_len = consts.history.len;
     const buffer_len = 2 * hist_len;
@@ -578,6 +579,7 @@ test "check struct sizes" {
     // defer cmp.deinit();
 }
 
+// Tokens store
 const Tokens = struct {
     list: [consts.deflate.tokens]Token = undefined,
     pos: usize = 0,
@@ -653,7 +655,7 @@ test "deflate file tokenization" {
 
             // Stream uncompressed `orignal` data to the compressor. It will
             // produce tokens list and pass that list to the TokenDecoder. This
-            // TokenDecoder uses SlidingWindow from inflate to convert list of
+            // TokenDecoder uses CircularBuffer from inflate to convert list of
             // tokens back to the uncompressed stream.
             try cmp.compress(original.reader());
             try cmp.flush();
@@ -673,8 +675,8 @@ test "deflate file tokenization" {
 
 fn TokenDecoder(comptime WriterType: type) type {
     return struct {
-        const SlidingWindow = @import("sliding_window.zig").SlidingWindow;
-        win: SlidingWindow = .{},
+        const CircularBuffer = @import("CircularBuffer.zig");
+        hist: CircularBuffer = .{},
         wrt: WriterType,
         tokens_count: usize = 0,
 
@@ -688,17 +690,17 @@ fn TokenDecoder(comptime WriterType: type) type {
             self.tokens_count += tokens.len;
             for (tokens) |t| {
                 switch (t.kind) {
-                    .literal => self.win.write(t.literal()),
-                    .match => self.win.writeCopy(t.length(), t.distance()),
+                    .literal => self.hist.write(t.literal()),
+                    .match => self.hist.writeMatch(t.length(), t.distance()),
                 }
-                if (self.win.free() < 285) try self.flushWin();
+                if (self.hist.free() < 285) try self.flushWin();
             }
             try self.flushWin();
         }
 
         fn flushWin(self: *Self) !void {
             while (true) {
-                const buf = self.win.read();
+                const buf = self.hist.read();
                 if (buf.len == 0) break;
                 try self.wrt.writeAll(buf);
             }
