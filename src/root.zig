@@ -1,22 +1,21 @@
-/// In computing, Deflate (stylized as DEFLATE, and also called Flate[1][2]) is
-/// a lossless data compression file format that uses a combination of LZ77 and
-/// Huffman coding. It was designed by Phil Katz, for version 2 of his PKZIP
-/// archiving tool. Deflate was later specified in RFC 1951 (1996).[3]
-/// Encoder/compressor
-///
+/// Deflate is a lossless data compression file format that uses a combination
+/// of LZ77 and Huffman coding.
+pub const deflate = @import("deflate.zig");
+
 /// Inflate is the decoding process that takes a Deflate bitstream for
 /// decompression and correctly produces the original full-size data or file.
-/// decoder/decompressor
-///
-pub const deflate = @import("deflate.zig");
 pub const inflate = @import("inflate.zig");
 
-pub const Level = @import("deflate.zig").Level;
+/// Level trades between speed and compression size.
+pub const Level = deflate.Level;
 
+/// Container defines header/footer arround deflate bit stream. Gzip and zlib
+/// compression algorithms are container arround deflate bit stream body.
 const Container = @import("container.zig").Container;
 
 fn byContainer(comptime container: Container) type {
     return struct {
+        /// Decompress compressed data from reader and write them to the writer.
         pub fn decompress(reader: anytype, writer: anytype) !void {
             try inflate.decompress(container, reader, writer);
         }
@@ -25,10 +24,12 @@ fn byContainer(comptime container: Container) type {
             return inflate.Inflate(container, ReaderType);
         }
 
+        /// Create Decompressor which read compressed data from reader.
         pub fn decompressor(reader: anytype) Decompressor(@TypeOf(reader)) {
             return inflate.decompressor(container, reader);
         }
 
+        /// Compress plain data from reader and write them to the writer.
         pub fn compress(reader: anytype, writer: anytype, level: Level) !void {
             try deflate.compress(container, reader, writer, level);
         }
@@ -37,6 +38,7 @@ fn byContainer(comptime container: Container) type {
             return deflate.Compressor(container, WriterType);
         }
 
+        /// Create Compressor which outputs compressed data to the writer.
         pub fn compressor(writer: anytype, level: Level) !Compressor(@TypeOf(writer)) {
             return try deflate.compressor(container, writer, level);
         }
@@ -45,10 +47,15 @@ fn byContainer(comptime container: Container) type {
             return deflate.HuffmanOnlyCompressor(container, WriterType);
         }
 
+        /// Disables Lempel-Ziv match searching and only performs Huffman
+        /// entropy encoding. Results in faster compression, much less memory
+        /// requirements during compression but bigger compressed sizes.
         pub fn huffmanOnlyCompressor(writer: anytype) !HuffmanOnlyCompressor(@TypeOf(writer)) {
             return deflate.huffmanOnlyCompressor(container, writer);
         }
 
+        /// Compress plain data from reader and write them to the writer using
+        /// huffman only compression algorithm.
         pub fn compressHuffmanOnly(reader: anytype, writer: anytype) !void {
             var cmp = try huffmanOnlyCompressor(writer);
             var buf: [1024 * 64]u8 = undefined;

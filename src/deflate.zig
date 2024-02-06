@@ -12,7 +12,7 @@ const Container = @import("container.zig").Container;
 const SlidingWindow = @import("SlidingWindow.zig");
 const Lookup = @import("Lookup.zig");
 
-/// Trades between speed and compression.
+/// Trades between speed and compression size.
 /// Starts with level 4: in [zlib](https://github.com/madler/zlib/blob/abd3d1a28930f89375d4b41408b39f6c1be157b2/deflate.c#L115C1-L117C43)
 /// levels 1-3 are using different algorithm to perform faster but with less
 /// compression. That is not implemented here.
@@ -357,8 +357,9 @@ pub fn huffmanOnlyCompressor(comptime container: Container, writer: anytype) !Hu
     return try HuffmanOnlyCompressor(container, @TypeOf(writer)).init(writer);
 }
 
-// Creates huffman only deflate blocks. Disables Lempel-Ziv match searching and
-// only performs Huffman entropy encoding.
+/// Creates huffman only deflate blocks. Disables Lempel-Ziv match searching and
+/// only performs Huffman entropy encoding. Results in faster compression, much
+/// less memory requirements during compression but bigger compressed sizes.
 pub fn HuffmanOnlyCompressor(comptime container: Container, comptime WriterType: type) type {
     const BlockWriterType = BlockWriter(WriterType);
     return struct {
@@ -495,6 +496,10 @@ test "check struct sizes" {
     // const allocator = la.allocator();
     // var cmp = try std.compress.deflate.compressor(allocator, io.null_writer, .{});
     // defer cmp.deinit();
+
+    const HOC = HuffmanOnlyCompressor(.raw, @TypeOf(io.null_writer));
+    try expect(@sizeOf(HOC) == 11480);
+    //print("size of HOC {d}\n", .{@sizeOf(HOC)});
 }
 
 test "deflate file tokenization" {
