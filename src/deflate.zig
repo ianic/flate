@@ -482,12 +482,11 @@ test "check struct sizes" {
     const hbw_size = 11472; // 11.2k
     try expect(@sizeOf(Bw) == hbw_size);
 
-    //const D = Deflate(Hbw);
-    // 404744, 395.26k
+    const D = Deflate(.raw, @TypeOf(io.null_writer), Bw);
+    // 404744, 395.26K
     // ?Token: 6, ?u8: 2, level: 8
-    //try expect(@sizeOf(D) == tokens_size + lookup_size + window_size + hbw_size + 6 + 2 + 8);
-
-    //print("Delfate size: {d} {d}\n", .{ @sizeOf(D), @sizeOf(LevelArgs) });
+    try expect(@sizeOf(D) == tokens_size + lookup_size + window_size + hbw_size + 24);
+    //print("Delfate size: {d} {d}\n", .{ @sizeOf(D), tokens_size + lookup_size + hbw_size + window_size });
 
     // current std lib deflate allocation:
     // 797_901, 779.2k
