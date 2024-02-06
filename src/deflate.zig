@@ -12,6 +12,10 @@ const Container = @import("container.zig").Container;
 const SlidingWindow = @import("SlidingWindow.zig");
 const Lookup = @import("Lookup.zig");
 
+/// Trades between speed and compression.
+/// Starts with level 4: in [zlib](https://github.com/madler/zlib/blob/abd3d1a28930f89375d4b41408b39f6c1be157b2/deflate.c#L115C1-L117C43)
+/// levels 1-3 are using different algorithm to perform faster but with less
+/// compression. That is not implemented here.
 pub const Level = enum(u4) {
     // zig fmt: off
     fast = 0xb,         level_4 = 4,
@@ -23,11 +27,12 @@ pub const Level = enum(u4) {
     // zig fmt: on
 };
 
+/// Algorithm knobs for each level.
 const LevelArgs = struct {
-    good: u16, // do less lookups if we already have match of this length
-    nice: u16, // stop looking for better match if we found match with at least this length
-    lazy: u16, // don't do lazy match find if got match with at least this length
-    chain: u16, // how many lookups for previous match to perform
+    good: u16, // Do less lookups if we already have match of this length.
+    nice: u16, // Stop looking for better match if we found match with at least this length.
+    lazy: u16, // Don't do lazy match find if got match with at least this length.
+    chain: u16, // How many lookups for previous match to perform.
 
     pub fn get(level: Level) LevelArgs {
         // zig fmt: off
@@ -43,12 +48,14 @@ const LevelArgs = struct {
     }
 };
 
+/// Compress plain data from reader into compressed stream written to writer.
 pub fn compress(comptime container: Container, reader: anytype, writer: anytype, level: Level) !void {
     var c = try compressor(container, writer, level);
     try c.compress(reader);
     try c.close();
 }
 
+/// Create compressor for writer type.
 pub fn compressor(comptime container: Container, writer: anytype, level: Level) !Compressor(
     container,
     @TypeOf(writer),
@@ -56,28 +63,54 @@ pub fn compressor(comptime container: Container, writer: anytype, level: Level) 
     return try Compressor(container, @TypeOf(writer)).init(writer, level);
 }
 
+/// Compressor type.
 pub fn Compressor(comptime container: Container, comptime WriterType: type) type {
     const TokenWriterType = BlockWriter(WriterType);
     return Deflate(container, WriterType, TokenWriterType);
 }
 
-// Default compression algorithm. Has two steps: tokenization and token
-// encoding.
-//
-// Tokenization takes uncompressed input stream and produces list of tokens.
-// Each token can be literal (byte of data) or match (backrefernce to previous
-// data with length and distance). Tokenization acumulates `const.block.tokens`
-// number of tokens, when full or `flush` is called tokens are passed to the
-// `token_writer`. Level defines how hard (how slow) it tries to find match.
-//
-// Token writer will decide which type of deflate block to write (stored, fixed,
-// dynamic) and encode tokens to the output byte stream. Client has to call
-// `close` to write block with the final bit set.
-//
-// Container defines type of header and footer which can be gzip, zlib or raw.
-// They all share same deflate body. Raw has no header or footer just deflate
-// body.
-//
+/// Default compression algorithm. Has two steps: tokenization and token
+/// encoding.
+///
+/// Tokenization takes uncompressed input stream and produces list of tokens.
+/// Each token can be literal (byte of data) or match (backrefernce to previous
+/// data with length and distance). Tokenization accumulators 32K tokens, when
+/// full or `flush` is called tokens are passed to the `block_writer`. Level
+/// defines how hard (how slow) it tries to find match.
+///
+/// Block writer will decide which type of deflate block to write (stored, fixed,
+/// dynamic) and encode tokens to the output byte stream. Client has to call
+/// `close` to write block with the final bit set.
+///
+/// Container defines type of header and footer which can be gzip, zlib or raw.
+/// They all share same deflate body. Raw has no header or footer just deflate
+/// body.
+///
+/// Compression algorithm explained in rfc-1951 (slightly edited for this case):
+///
+///   The compressor uses a chained hash table `lookup` to find duplicated
+///   strings, using a hash function that operates on 4-byte sequences. At any
+///   given point during compression, let XYZW be the next 4 input bytes
+///   (lookahead) to be examined (not necessarily all different, of course).
+///   First, the compressor examines the hash chain for XYZW. If the chain is
+///   empty, the compressor simply writes out X as a literal byte and advances
+///   one byte in the input. If the hash chain is not empty, indicating that the
+///   sequence XYZW (or, if we are unlucky, some other 4 bytes with the same
+///   hash function value) has occurred recently, the compressor compares all
+///   strings on the XYZW hash chain with the actual input data sequence
+///   starting at the current point, and selects the longest match.
+///
+///   To improve overall compression, the compressor defers the selection of
+///   matches ("lazy matching"): after a match of length N has been found, the
+///   compressor searches for a longer match starting at the next input byte. If
+///   it finds a longer match, it truncates the previous match to a length of
+///   one (thus producing a single literal byte) and then emits the longer
+///   match. Otherwise, it emits the original match, and, as described above,
+///   advances N bytes before continuing.
+///
+/// This function accepts BlockWriterType so we can change that in test to test
+/// just tokenization part.
+///
 fn Deflate(comptime container: Container, comptime WriterType: type, comptime BlockWriterType: type) type {
     return struct {
         lookup: Lookup = .{},
@@ -203,6 +236,7 @@ fn Deflate(comptime container: Container, comptime WriterType: type, comptime Bl
                 chain >>= 2;
             }
 
+            // Hot path loop!
             while (prev_pos > 0 and chain > 0) : (chain -= 1) {
                 const distance = pos - prev_pos;
                 if (distance > consts.match.max_distance)

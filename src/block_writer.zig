@@ -10,6 +10,9 @@ pub fn blockWriter(writer: anytype) BlockWriter(@TypeOf(writer)) {
     return BlockWriter(@TypeOf(writer)).init(writer);
 }
 
+/// Accepts list of tokens, decides what is best block type to write. What block
+/// type will provide best compression. Writes header and body of the block.
+///
 pub fn BlockWriter(comptime WriterType: type) type {
     const BitWriterType = BitWriter(WriterType);
     return struct {
