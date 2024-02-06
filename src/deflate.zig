@@ -227,7 +227,7 @@ fn Deflate(comptime container: Container, comptime WriterType: type, comptime Bl
             try self.block_writer.writeBlock(self.tokens.tokens(), final, self.win.tokensBuffer());
             try self.block_writer.flush();
             self.tokens.reset();
-            self.win.flushed();
+            self.win.flush();
         }
 
         // Flush internal buffers to the output writer. Writes deflate block to
