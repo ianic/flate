@@ -84,6 +84,16 @@ Running same benchmarks on x86_64 GNU/Linux (Intel(R) Core(TM) i7-3520M CPU @ 2.
 | large.tar.gz | 11162624  | 65.68 | 99.80 | 1.52 |
 | cantrbry.tar.gz | 2821120  | 17.69 | 26.85 | 1.52 |
 
+## Memory usage
+
+This library uses static allocations for all structures, doesn't require allocator. That makes sense especially for deflate where all structures, internal buffers are allocated to the full size. Little less for inflate where we std version uses less memory by not preallocating to theoretical max size array which are usually not fully used. 
+
+For deflate this library allocates 395K while std 779K.  
+For inflate this library allocates 195K while std usually around 36K.  
+
+Inflate difference is because we here use 64K history instead of 32K, and main reason because in huffman_decoder.zig we use lookup of 32K places for 286 or 30 symbols!
+
+
 ## References
 
 Great materials for understanding deflate:
