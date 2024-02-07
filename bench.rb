@@ -3,6 +3,7 @@ require 'json'
 $levels = [0] + (4..9).to_a
 
 def deflate_bench
+  `mkdir -p tmp`
   # file="bin/bench_data/war_and_peace.txt"
   file="bin/bench_data/ziglang.tar"
   `zig build bench -Doptimize=ReleaseSafe`

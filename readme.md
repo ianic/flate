@@ -7,7 +7,9 @@ Here I used all those three as reference, but mostly started from scratch. Infla
 ## Benchmark
 
 Comparing this implementation with the one we currently have in Zig's standard library (std).   
-Std is roughly 1.5 times slower in decompression, and 1.17 times slower in compression. Compressed size is pretty much same in both cases.  
+Std is roughly 1.5 times slower in decompression, and 1.17 times slower in compression. Compressed sizes are pretty much same in both cases.  
+
+Benchmark are done on aarch64/Linux (Apple M1 cpu): 
 
 ### Compression
 
@@ -62,6 +64,26 @@ export FILE=tmp/ziglang.tar
 hyperfine -r 5 'zig-out/bin/gzip $FILE' 'gzip -kf $FILE'
 ```
 
+Running same benchmarks on x86_64 GNU/Linux (Intel(R) Core(TM) i7-3520M CPU @ 2.90GHz):
+
+| level | time [ms] | std [ms] | time/std  |
+| :---  |      ---: |     ---: |      ---: |
+|0 | 602.97 | 740.39 | 1.23 |
+|4 | 1434.57 | 1837.89 | 1.28 |
+|5 | 1875.17 | 2454.04 | 1.31 |
+|6 | 2581.49 | 3353.04 | 1.3 |
+|7 | 3211.47 | 4749.88 | 1.48 |
+|8 | 6444.44 | 7359.56 | 1.14 |
+|9 | 8175.93 | 11447.38 | 1.4 |
+
+
+| file | size |  time [ms] | std [ms] | time/std  |
+| :--- | ---: |       ---: |     ---: |      ---: |
+| ziglang.tar.gz | 177244160  | 567.85 | 858.50 | 1.51 |
+| war_and_peace.txt.gz | 3359630  | 25.96 | 36.04 | 1.39 |
+| large.tar.gz | 11162624  | 65.68 | 99.80 | 1.52 |
+| cantrbry.tar.gz | 2821120  | 17.69 | 26.85 | 1.52 |
+
 ## References
 
 Great materials for understanding deflate:
@@ -74,3 +96,5 @@ Great materials for understanding deflate:
 [Mark Adler on stackoverflow](https://stackoverflow.com/search?q=user%3A1180620+deflate)  
 [Faster zlib/DEFLATE](https://dougallj.wordpress.com/2022/08/20/faster-zlib-deflate-decompression-on-the-apple-m1-and-x86/)  
 [Reading bits with zero refill latency](https://dougallj.wordpress.com/2022/08/26/reading-bits-with-zero-refill-latency/)  
+
+
