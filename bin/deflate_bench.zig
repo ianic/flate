@@ -197,7 +197,10 @@ pub fn stdZlib(reader: anytype, writer: anytype, opt: Options) !void {
 }
 
 pub fn stdDeflate(reader: anytype, writer: anytype, opt: Options) !void {
-    const c_opt = std.compress.deflate.CompressorOptions{ .level = @enumFromInt(opt.level) };
+    const c_opt: std.compress.deflate.CompressorOptions = if (opt.level == 0)
+        .{ .level = .huffman_only }
+    else
+        .{ .level = @enumFromInt(opt.level) };
 
     var cmp = try std.compress.deflate.compressor(allocator, writer, c_opt);
     defer cmp.deinit();
