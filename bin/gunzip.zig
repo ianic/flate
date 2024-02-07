@@ -22,6 +22,8 @@ pub fn main() !void {
         var output_file = try std.fs.cwd().createFile(output_file_name, .{ .truncate = true });
         defer output_file.close();
 
-        try gzip.decompress(input_file.reader(), output_file.writer());
+        var br = std.io.bufferedReader(input_file.reader());
+
+        try gzip.decompress(br.reader(), output_file.writer());
     }
 }
