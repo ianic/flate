@@ -93,6 +93,36 @@ For inflate this library allocates 195K while std usually around 36K.
 
 Inflate difference is because we here use 64K history instead of 32K, and main reason because in huffman_decoder.zig we use lookup of 32K places for 286 or 30 symbols!
 
+## Interface
+
+Currently in std lib we have different wording for the same things. Type is called Decompressor, Decompress, DecompressStream (deflate, gzip, zlib). I'll suggest that we stick with Decompressor/Compressor and decompressor/compressor for initializers of that type. That will free compress/decompress word for one-shot action. Fn compress receives reader and writer, reads all plain data from reader and writes compressed data to the writer. I expect that many places can use this simple implementation.  
+
+All gzip/zlib/flate will have same methods, here on the gzip example:
+```Zig
+const std = @import("std");
+const gzip = std.compress.gzip;
+const zlib = std.compress.zlib;
+const flate = std.compress.flate;
+
+/// Decompress compressed data from reader and write plain data to the writer.
+gzip.decompress(reader: anytype, writer: anytype) !void
+
+/// Create Decompressor which will read compressed data from reader.
+gzip.decompressor(reader: anytype) gzip.Decompressor(@TypeOf(reader)) 
+
+/// Decompressor type
+gzip.Decompressor(comptime ReaderType: type) type {
+
+
+/// Compress plain data from reader and write compressed data to the writer.
+gzip.compress(reader: anytype, writer: anytype, level: Level) !void 
+
+/// Create Compressor which outputs compressed data to the writer.
+gzip.compressor(writer: anytype, level: Level) !gzip.Compressor(@TypeOf(writer)) 
+
+/// Compressor type
+gzip.Compressor(comptime WriterType: type) type 
+```
 
 ## References
 
