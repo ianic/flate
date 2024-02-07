@@ -35,9 +35,7 @@ pub fn run(output: anytype, opt: Options) !void {
         switch (opt.alg) {
             .deflate => try stdDeflate(input, output, opt),
             .zlib => try stdZlib(input, output, opt),
-            .gzip => {
-                print("There is no gzip compressor currently in std lib.\n", .{});
-            },
+            .gzip => try stdGzip(input, output, opt),
         }
     } else {
         if (opt.level == 0) {
@@ -194,6 +192,18 @@ pub fn stdZlib(reader: anytype, writer: anytype, opt: Options) !void {
     defer cmp.deinit();
     try stream(reader, cmp.writer());
     try cmp.finish();
+}
+
+pub fn stdGzip(reader: anytype, writer: anytype, opt: Options) !void {
+    const c_opt: std.compress.gzip.CompressOptions = if (opt.level == 0)
+        .{ .level = .huffman_only }
+    else
+        .{ .level = @enumFromInt(opt.level) };
+
+    var cmp = try std.compress.gzip.compress(allocator, writer, c_opt);
+    defer cmp.deinit();
+    try stream(reader, cmp.writer());
+    try cmp.close();
 }
 
 pub fn stdDeflate(reader: anytype, writer: anytype, opt: Options) !void {
