@@ -169,7 +169,7 @@ bytes: 24370812
 [Go compression levels](https://github.com/ziglang/zig/blob/993a83081a975464d1201597cf6f4cb7f6735284/lib/std/compress/deflate/compressor.zig#L78)  
 
 
-
+Timing compression's with std lib implementation
 | level | time [ms] | std [ms] | time/std  |
 | :---  |     ---: |     ---: |      ---: |
 |0 | 472.83 | 543.02 | 1.15 |
@@ -179,6 +179,9 @@ bytes: 24370812
 |7 | 2505.55 | 3141.31 | 1.25 |
 |8 | 4491.72 | 5118.71 | 1.14 |
 |9 | 6713.99 | 8243.63 | 1.23 |
+
+
+Size compression's with std lib implementation
 | level | size | std [ms] | sizs/std  |
 | :---  |     ---: |     ---: |      ---: |
 | 0 | 108398793 108397986 | -807 | 1.0000 |
