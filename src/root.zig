@@ -6,34 +6,36 @@ pub const deflate = @import("deflate.zig");
 /// decompression and correctly produces the original full-size data or file.
 pub const inflate = @import("inflate.zig");
 
-/// Level trades between speed and compression size.
-pub const Level = deflate.Level;
-
 /// Container defines header/footer arround deflate bit stream. Gzip and zlib
-/// compression algorithms are container arround deflate bit stream body.
+/// compression algorithms are containers arround deflate bit stream body.
 const Container = @import("container.zig").Container;
 
 fn byContainer(comptime container: Container) type {
     return struct {
-        /// Decompress compressed data from reader and write them to the writer.
+        /// Decompress compressed data from reader and write plain data to the writer.
         pub fn decompress(reader: anytype, writer: anytype) !void {
             try inflate.decompress(container, reader, writer);
         }
 
+        /// Decompressor type
         pub fn Decompressor(comptime ReaderType: type) type {
             return inflate.Inflate(container, ReaderType);
         }
 
-        /// Create Decompressor which read compressed data from reader.
+        /// Create Decompressor which will read compressed data from reader.
         pub fn decompressor(reader: anytype) Decompressor(@TypeOf(reader)) {
             return inflate.decompressor(container, reader);
         }
 
-        /// Compress plain data from reader and write them to the writer.
+        /// Compression level, trades between speed and compression size.
+        pub const Level = deflate.Level;
+
+        /// Compress plain data from reader and write compressed data to the writer.
         pub fn compress(reader: anytype, writer: anytype, level: Level) !void {
             try deflate.compress(container, reader, writer, level);
         }
 
+        /// Compressor type
         pub fn Compressor(comptime WriterType: type) type {
             return deflate.Compressor(container, WriterType);
         }
@@ -166,7 +168,7 @@ test "compress/decompress" {
     var cmp_buf: [32 * 1024]u8 = undefined; // compressed data buffer
     var dcm_buf: [64 * 1024]u8 = undefined; // decompressed data buffer
 
-    const levels = [_]Level{ .level_4, .level_5, .level_6, .level_7, .level_8, .level_9 };
+    const levels = [_]deflate.Level{ .level_4, .level_5, .level_6, .level_7, .level_8, .level_9 };
     const cases = [_]struct {
         data: []const u8, // uncompressed content
         gzip_sizes: [levels.len]usize, // compressed data sizes per level 4-9

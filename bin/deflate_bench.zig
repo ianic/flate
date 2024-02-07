@@ -48,7 +48,7 @@ pub fn run(output: anytype, opt: Options) !void {
             }
             return;
         }
-        const level: flate.Level = @enumFromInt(opt.level);
+        const level: raw.Level = @enumFromInt(opt.level);
         switch (opt.alg) {
             .deflate => try raw.compress(input, output, level),
             .zlib => try zlib.compress(input, output, level),
