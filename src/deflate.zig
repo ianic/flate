@@ -108,7 +108,10 @@ pub fn Compressor(comptime container: Container, comptime WriterType: type) type
 ///   match. Otherwise, it emits the original match, and, as described above,
 ///   advances N bytes before continuing.
 ///
-/// This function accepts BlockWriterType so we can change that in test to test
+///
+/// Allocates statically ~400K (192K lookup, 128K tokens, 64K window).
+///
+/// Deflate function accepts BlockWriterType so we can change that in test to test
 /// just tokenization part.
 ///
 fn Deflate(comptime container: Container, comptime WriterType: type, comptime BlockWriterType: type) type {
@@ -360,6 +363,9 @@ pub fn huffmanOnlyCompressor(comptime container: Container, writer: anytype) !Hu
 /// Creates huffman only deflate blocks. Disables Lempel-Ziv match searching and
 /// only performs Huffman entropy encoding. Results in faster compression, much
 /// less memory requirements during compression but bigger compressed sizes.
+///
+/// Allocates ~11.2K
+///
 pub fn HuffmanOnlyCompressor(comptime container: Container, comptime WriterType: type) type {
     const BlockWriterType = BlockWriter(WriterType);
     return struct {
