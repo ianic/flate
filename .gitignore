@@ -6,4 +6,4 @@ tmp
 /output
 /bench_data/
 /bin/bench_data/
-/zig-out-base/
+/zig-out-*

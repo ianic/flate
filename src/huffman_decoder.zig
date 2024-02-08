@@ -117,7 +117,7 @@ fn HuffmanDecoder(
             return self.findLinked(code, sym.next);
         }
 
-        fn findLinked(self: *Self, code: u16, start: u16) Symbol {
+        inline fn findLinked(self: *Self, code: u16, start: u16) Symbol {
             var pos = start;
             while (pos > 0) {
                 const sym = self.symbols[pos];

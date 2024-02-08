@@ -41,7 +41,7 @@ pub fn BitReader(comptime ReaderType: type) type {
         // bits to decode. So `nice` is not hard limit, it will just try to have
         // that number of bits available. If end of forward stream is reached
         // it may be some extra zero bits in buffer.
-        pub fn fill(self: *Self, nice: u6) !void {
+        pub inline fn fill(self: *Self, nice: u6) !void {
             if (self.nbits >= nice) {
                 return; // We have enought bits
             }
@@ -92,7 +92,7 @@ pub fn BitReader(comptime ReaderType: type) type {
         }
 
         // Alias for readF with flag.peak set.
-        pub fn peekF(self: *Self, comptime U: type, comptime how: u3) !U {
+        pub inline fn peekF(self: *Self, comptime U: type, comptime how: u3) !U {
             return self.readF(U, how | flag.peek);
         }
 

@@ -122,7 +122,7 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
             self.hist.writeMatch(length, distance);
         }
 
-        fn decodeLength(self: *Self, code: u8) !u16 {
+        inline fn decodeLength(self: *Self, code: u8) !u16 {
             if (code > 28) return error.CorruptInput;
             const ml = Token.matchLength(code);
             return if (ml.extra_bits == 0) // 0 - 5 extra bits
