@@ -36,9 +36,9 @@ pub fn decompressor(comptime container: Container, reader: anytype) Inflate(cont
 /// `step` function runs decoder until internal `hist` buffer is full. Client
 /// than needs to read that data in order to proceed with decoding.
 ///
-/// Allocates ~200K of internal buffers, most important are:
+/// Allocates 74.5K of internal buffers, most important are:
 ///   * 64K for history (CircularBuffer)
-///   * 2 * 64K (2 * 32K of u16) for huffman decoders (Literal and DistanceDecoder)
+///   * ~10K huffman decoders (Literal and DistanceDecoder)
 ///
 pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
     return struct {
@@ -151,7 +151,7 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
                 cl_l[codegen_order[i]] = try self.bits.read(u3);
             }
             var cl_h: hfd.CodegenDecoder = .{};
-            cl_h.build(&cl_l);
+            cl_h.generate(&cl_l);
 
             // literal code lengths
             var lit_l = [_]u4{0} ** (286);
@@ -171,8 +171,8 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
                 pos += try self.dynamicCodeLength(sym.symbol, &dst_l, pos);
             }
 
-            self.lit_h.build(&lit_l);
-            self.dst_h.build(&dst_l);
+            self.lit_h.generate(&lit_l);
+            self.dst_h.generate(&dst_l);
         }
 
         // Decode code length symbol to code length. Writes decoded length into
@@ -338,7 +338,7 @@ test "Struct sizes" {
     const ReaderType = @TypeOf(fbs.reader());
     const inflate_size = @sizeOf(Inflate(.gzip, ReaderType));
 
-    try testing.expectEqual(199352, inflate_size);
+    try testing.expectEqual(76320, inflate_size);
     try testing.expectEqual(
         @sizeOf(CircularBuffer) + @sizeOf(hfd.LiteralDecoder) + @sizeOf(hfd.DistanceDecoder) + 48,
         inflate_size,
@@ -346,8 +346,8 @@ test "Struct sizes" {
     try testing.expectEqual(65536 + 8 + 8, @sizeOf(CircularBuffer));
     try testing.expectEqual(8, @sizeOf(Container.raw.Hasher()));
     try testing.expectEqual(24, @sizeOf(BitReader(ReaderType)));
-    try testing.expectEqual(67132, @sizeOf(hfd.LiteralDecoder));
-    try testing.expectEqual(66620, @sizeOf(hfd.DistanceDecoder));
+    try testing.expectEqual(6384, @sizeOf(hfd.LiteralDecoder));
+    try testing.expectEqual(4336, @sizeOf(hfd.DistanceDecoder));
 }
 
 test "flate decompress" {
