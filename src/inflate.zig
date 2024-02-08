@@ -233,6 +233,7 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
         // return symbol.
         inline fn decodeSymbol(self: *Self, decoder: anytype) !hfd.Symbol {
             const sym = decoder.find(try self.bits.peekF(u15, F.buffered | F.reverse));
+            if (sym.code_bits == 0) return error.CorruptInput;
             self.bits.shift(sym.code_bits);
             return sym;
         }
@@ -480,5 +481,14 @@ test "lengths overflow" {
     var al = std.ArrayList(u8).init(testing.allocator);
     defer al.deinit();
 
+    try testing.expectError(error.CorruptInput, decompress(.raw, fb.reader(), al.writer()));
+}
+
+test "fix: infinite loop during 'out of codes'" {
+    const data = "\x950\x00\x0000000";
+
+    var fb = std.io.fixedBufferStream(data);
+    var al = std.ArrayList(u8).init(testing.allocator);
+    defer al.deinit();
     try testing.expectError(error.CorruptInput, decompress(.raw, fb.reader(), al.writer()));
 }
