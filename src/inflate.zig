@@ -508,34 +508,27 @@ test "fuzzing tests" {
         .{ .in = @embedFile("testdata/fuzzing/empty-distance-alphabet01"), .err = error.EndOfStream },
         .{ .in = @embedFile("testdata/fuzzing/empty-distance-alphabet02"), .out = "" },
         .{ .in = @embedFile("testdata/fuzzing/end-of-stream"), .err = error.EndOfStream },
-        .{ .in = @embedFile("testdata/fuzzing/invalid-distance"), .err = error.EndOfStream }, // panic
+        .{ .in = @embedFile("testdata/fuzzing/invalid-distance"), .err = error.EndOfStream },
         .{ .in = @embedFile("testdata/fuzzing/invalid-tree01"), .err = error.EndOfStream },
         .{ .in = @embedFile("testdata/fuzzing/invalid-tree02"), .err = error.EndOfStream },
         .{ .in = @embedFile("testdata/fuzzing/invalid-tree03"), .err = error.EndOfStream },
         .{ .in = @embedFile("testdata/fuzzing/lengths-overflow"), .err = error.CorruptInput },
-        //.{ .in = "\xed\x1d$\xe9\xff\xff9\x0e", .err = error.CorruptInput },
-
         .{ .in = @embedFile("testdata/fuzzing/out-of-codes"), .err = error.CorruptInput },
-        //.{ .in = "\x950\x00\x0000000", .err = error.CorruptInput },
         .{ .in = @embedFile("testdata/fuzzing/puff01"), .err = error.DeflateWrongNlen },
         .{ .in = @embedFile("testdata/fuzzing/puff02"), .err = error.EndOfStream },
         .{ .in = @embedFile("testdata/fuzzing/puff03"), .out = &[_]u8{0xa} },
-        .{ .in = @embedFile("testdata/fuzzing/puff04"), .err = error.CorruptInput }, // this was panicking
+        .{ .in = @embedFile("testdata/fuzzing/puff04"), .err = error.CorruptInput },
         .{ .in = @embedFile("testdata/fuzzing/puff05"), .err = error.EndOfStream },
         .{ .in = @embedFile("testdata/fuzzing/puff06"), .err = error.EndOfStream },
-        //.{ .in = @embedFile("testdata/fuzzing/puff07") }, // panic
         .{ .in = @embedFile("testdata/fuzzing/puff08"), .err = error.CorruptInput },
-        //.{ .in = "\x04\xc0\x81\x08\x00\x00\x00\x00 \x7f\xeb\x0b\x00\x00", .err = error.CorruptInput },
         .{ .in = @embedFile("testdata/fuzzing/puff09"), .out = "P" },
         .{ .in = @embedFile("testdata/fuzzing/puff10"), .err = error.DeflateInvalidCode },
         .{ .in = @embedFile("testdata/fuzzing/puff11"), .err = error.EndOfStream },
-
         .{ .in = @embedFile("testdata/fuzzing/puff12"), .err = error.EndOfStream },
         .{ .in = @embedFile("testdata/fuzzing/puff13"), .err = error.CorruptInput },
-        //.{ .in = "\x04\x00\xfe\xff", .err = error.CorruptInput },
         .{ .in = @embedFile("testdata/fuzzing/puff14"), .err = error.CorruptInput },
         .{ .in = @embedFile("testdata/fuzzing/puff15"), .err = error.EndOfStream },
-        .{ .in = @embedFile("testdata/fuzzing/puff16"), .err = error.EndOfStream }, // panic
+        .{ .in = @embedFile("testdata/fuzzing/puff16"), .err = error.EndOfStream },
         .{ .in = @embedFile("testdata/fuzzing/puff17"), .err = error.EndOfStream },
     };
 
