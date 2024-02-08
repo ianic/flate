@@ -74,6 +74,7 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
             DeflateInvalidCode,
             DeflateInvalidBlockType,
             DeflateWrongNlen,
+            CorruptInput,
         };
 
         pub fn init(rt: ReaderType) Self {
@@ -186,6 +187,7 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
                     return 1;
                 },
                 16 => {
+                    if (pos == 0) return error.CorruptInput;
                     // Copy the previous code length 3 - 6 times.
                     // The next 2 bits indicate repeat length
                     const n: u8 = @as(u8, try self.bits.read(u2)) + 3;
@@ -469,4 +471,14 @@ test "zlib decompress" {
         try decompress(.zlib, fb.reader(), al.writer());
         try testing.expectEqualStrings(c.out, al.items);
     }
+}
+
+test "lengths overflow" {
+    const data = "\xed\x1d$\xe9\xff\xff9\x0e";
+
+    var fb = std.io.fixedBufferStream(data);
+    var al = std.ArrayList(u8).init(testing.allocator);
+    defer al.deinit();
+
+    try testing.expectError(error.CorruptInput, decompress(.raw, fb.reader(), al.writer()));
 }
