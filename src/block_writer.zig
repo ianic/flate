@@ -51,7 +51,7 @@ pub fn BlockWriter(comptime WriterType: type) type {
             self.bit_writer.setWriter(new_writer);
         }
 
-        inline fn writeCode(self: *Self, c: hc.HuffCode) Error!void {
+        fn writeCode(self: *Self, c: hc.HuffCode) Error!void {
             try self.bit_writer.writeBits(c.code, c.len);
         }
 

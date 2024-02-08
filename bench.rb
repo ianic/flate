@@ -125,5 +125,7 @@ $inputs = [
     },
 ];
 
-deflate_bench
-print_deflate_bench
+#deflate_bench
+#print_deflate_bench
+
+inflate_bench

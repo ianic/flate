@@ -122,7 +122,7 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
             self.hist.writeMatch(length, distance);
         }
 
-        inline fn decodeLength(self: *Self, code: u8) !u16 {
+        fn decodeLength(self: *Self, code: u8) !u16 {
             if (code > 28) return error.CorruptInput;
             const ml = Token.matchLength(code);
             return if (ml.extra_bits == 0) // 0 - 5 extra bits
@@ -131,7 +131,7 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
                 ml.base + try self.bits.readN(ml.extra_bits, F.buffered);
         }
 
-        inline fn decodeDistance(self: *Self, code: u8) !u16 {
+        fn decodeDistance(self: *Self, code: u8) !u16 {
             if (code > 29) return error.CorruptInput;
             const md = Token.matchDistance(code);
             return if (md.extra_bits == 0) // 0 - 13 extra bits
@@ -231,7 +231,7 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
         // decoder to find symbol for that code. We then know how many bits is
         // used. Shift bit reader for that much bits, those bits are used. And
         // return symbol.
-        inline fn decodeSymbol(self: *Self, decoder: anytype) !hfd.Symbol {
+        fn decodeSymbol(self: *Self, decoder: anytype) !hfd.Symbol {
             const sym = decoder.find(try self.bits.peekF(u15, F.buffered | F.reverse));
             if (sym.code_bits == 0) return error.CorruptInput;
             try self.bits.shift(sym.code_bits);

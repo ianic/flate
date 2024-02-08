@@ -28,11 +28,11 @@ pub fn add(self: *Self, data: []const u8, pos: u16) u16 {
 
 // Retruns previous location with the same hash value given the current
 // position.
-pub inline fn prev(self: *Self, pos: u16) u16 {
+pub fn prev(self: *Self, pos: u16) u16 {
     return self.chain[pos];
 }
 
-inline fn set(self: *Self, h: u32, pos: u16) u16 {
+fn set(self: *Self, h: u32, pos: u16) u16 {
     const p = self.head[h];
     self.head[h] = pos;
     self.chain[pos] = p;
@@ -72,14 +72,14 @@ pub fn bulkAdd(self: *Self, data: []const u8, len: u16, pos: u16) void {
 }
 
 // Calculates hash of the first 4 bytes of `b`.
-inline fn hash(b: *const [4]u8) u32 {
+fn hash(b: *const [4]u8) u32 {
     return hashu(@as(u32, b[3]) |
         @as(u32, b[2]) << 8 |
         @as(u32, b[1]) << 16 |
         @as(u32, b[0]) << 24);
 }
 
-inline fn hashu(v: u32) u32 {
+fn hashu(v: u32) u32 {
     return @intCast((v *% prime4) >> consts.lookup.shift);
 }
 

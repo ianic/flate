@@ -26,12 +26,12 @@ buffer: [buffer_len]u8 = undefined,
 wp: usize = 0, // write position
 rp: usize = 0, // read position
 
-inline fn writeAll(self: *Self, buf: []const u8) void {
+fn writeAll(self: *Self, buf: []const u8) void {
     for (buf) |c| self.write(c);
 }
 
 // Write literal.
-pub inline fn write(self: *Self, b: u8) void {
+pub fn write(self: *Self, b: u8) void {
     assert(self.wp - self.rp < mask);
     self.buffer[self.wp & mask] = b;
     self.wp += 1;
@@ -97,7 +97,7 @@ const ReadBlock = struct {
 };
 
 // Returns position of continous read block data.
-inline fn readBlock(self: *Self, max: usize) ReadBlock {
+fn readBlock(self: *Self, max: usize) ReadBlock {
     const r = self.rp & mask;
     const w = self.wp & mask;
     const n = @min(
@@ -112,13 +112,13 @@ inline fn readBlock(self: *Self, max: usize) ReadBlock {
 }
 
 // Number of free bytes for write.
-pub inline fn free(self: *Self) usize {
+pub fn free(self: *Self) usize {
     return buffer_len - (self.wp - self.rp);
 }
 
 // Full if largest match can't fit. 258 is largest match length. That much bytes
 // can be produced in single decode step.
-pub inline fn full(self: *Self) bool {
+pub fn full(self: *Self) bool {
     return self.free() < 258 + 1;
 }
 

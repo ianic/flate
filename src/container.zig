@@ -180,7 +180,7 @@ pub const Container = enum {
 
             const Self = @This();
 
-            pub inline fn update(self: *Self, buf: []const u8) void {
+            pub fn update(self: *Self, buf: []const u8) void {
                 switch (wrap) {
                     .raw => {},
                     else => {

@@ -45,7 +45,7 @@ pub fn slide(self: *Self) u16 {
 
 // Data from the current position (read position). Those part of the buffer is
 // not converted to tokens yet.
-inline fn lookahead(self: *Self) []const u8 {
+fn lookahead(self: *Self) []const u8 {
     assert(self.wp >= self.rp);
     return self.buffer[self.rp..self.wp];
 }

@@ -41,7 +41,7 @@ pub fn BitReader(comptime ReaderType: type) type {
         // bits to decode. So `nice` is not hard limit, it will just try to have
         // that number of bits available. If end of forward stream is reached
         // it may be some extra zero bits in buffer.
-        pub inline fn fill(self: *Self, nice: u6) !void {
+        pub fn fill(self: *Self, nice: u6) !void {
             if (self.nbits >= nice) {
                 return; // We have enought bits
             }
@@ -87,17 +87,17 @@ pub fn BitReader(comptime ReaderType: type) type {
         };
 
         // Alias for readF(U, 0).
-        pub inline fn read(self: *Self, comptime U: type) !U {
+        pub fn read(self: *Self, comptime U: type) !U {
             return self.readF(U, 0);
         }
 
         // Alias for readF with flag.peak set.
-        pub inline fn peekF(self: *Self, comptime U: type, comptime how: u3) !U {
+        pub fn peekF(self: *Self, comptime U: type, comptime how: u3) !U {
             return self.readF(U, how | flag.peek);
         }
 
         // Read with flags provided.
-        pub inline fn readF(self: *Self, comptime U: type, comptime how: u3) !U {
+        pub fn readF(self: *Self, comptime U: type, comptime how: u3) !U {
             const n: u6 = @bitSizeOf(U);
             switch (how) {
                 0 => { // `normal` read
@@ -141,7 +141,7 @@ pub fn BitReader(comptime ReaderType: type) type {
 
         // Read n number of bits.
         // Only buffered flag can be used in how.
-        pub inline fn readN(self: *Self, n: u4, comptime how: u3) !u16 {
+        pub fn readN(self: *Self, n: u4, comptime how: u3) !u16 {
             switch (how) {
                 0 => {
                     try self.fill(n);
@@ -156,14 +156,14 @@ pub fn BitReader(comptime ReaderType: type) type {
         }
 
         // Advance buffer for n bits.
-        pub inline fn shift(self: *Self, n: u6) !void {
+        pub fn shift(self: *Self, n: u6) !void {
             if (n > self.nbits) return error.EndOfStream;
             self.bits >>= n;
             self.nbits -= n;
         }
 
         // Skip n bytes.
-        pub inline fn skipBytes(self: *Self, n: u16) !void {
+        pub fn skipBytes(self: *Self, n: u16) !void {
             for (0..n) |_| {
                 try self.fill(8);
                 try self.shift(8);
@@ -171,12 +171,12 @@ pub fn BitReader(comptime ReaderType: type) type {
         }
 
         // Number of bits to align stream to the byte boundary.
-        inline fn alignBits(self: *Self) u3 {
+        fn alignBits(self: *Self) u3 {
             return @intCast(self.nbits & 0x7);
         }
 
         // Align stream to the byte boundary.
-        pub inline fn alignToByte(self: *Self) void {
+        pub fn alignToByte(self: *Self) void {
             const ab = self.alignBits();
             if (ab > 0) self.shift(ab) catch unreachable;
         }

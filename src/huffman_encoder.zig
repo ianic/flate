@@ -453,7 +453,7 @@ test "generate a Huffman code for the 30 possible relative distances (LZ77 dista
 }
 
 // Reverse bit-by-bit a N-bit code.
-inline fn bitReverse(comptime T: type, value: T, n: usize) T {
+fn bitReverse(comptime T: type, value: T, n: usize) T {
     const r = @bitReverse(value);
     return r >> @as(math.Log2Int(T), @intCast(@typeInfo(T).Int.bits - n));
 }

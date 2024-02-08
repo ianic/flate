@@ -199,27 +199,27 @@ fn Deflate(comptime container: Container, comptime WriterType: type, comptime Bl
             }
         }
 
-        inline fn windowAdvance(self: *Self, step: u16, lh: []const u8, pos: u16) void {
+        fn windowAdvance(self: *Self, step: u16, lh: []const u8, pos: u16) void {
             // current position is already added in findMatch
             self.lookup.bulkAdd(lh[1..], step - 1, pos + 1);
             self.win.advance(step);
         }
 
         // Add previous literal (if any) to the tokens list.
-        inline fn addPrevLiteral(self: *Self) !void {
+        fn addPrevLiteral(self: *Self) !void {
             if (self.prev_literal) |l| try self.addToken(Token.initLiteral(l));
         }
 
         // Add match to the tokens list, reset prev pointers.
         // Returns length of the added match.
-        inline fn addMatch(self: *Self, m: Token) !u16 {
+        fn addMatch(self: *Self, m: Token) !u16 {
             try self.addToken(m);
             self.prev_literal = null;
             self.prev_match = null;
             return m.length();
         }
 
-        inline fn addToken(self: *Self, token: Token) !void {
+        fn addToken(self: *Self, token: Token) !void {
             self.tokens.add(token);
             if (self.tokens.full()) try self.flushTokens(false);
         }
@@ -274,7 +274,7 @@ fn Deflate(comptime container: Container, comptime WriterType: type, comptime Bl
         }
 
         // Slide win and if needed lookup tables.
-        inline fn slide(self: *Self) void {
+        fn slide(self: *Self) void {
             const n = self.win.slide();
             self.lookup.slide(n);
         }

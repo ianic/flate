@@ -108,7 +108,7 @@ fn HuffmanDecoder(
         }
 
         /// Finds symbol for lookup table code.
-        pub inline fn find(self: *Self, code: u16) Symbol {
+        pub fn find(self: *Self, code: u16) Symbol {
             // try to find in lookup table
             const idx = code >> lookup_shift;
             const sym = self.lookup[idx];
@@ -117,7 +117,7 @@ fn HuffmanDecoder(
             return self.findLinked(code, sym.next);
         }
 
-        inline fn findLinked(self: *Self, code: u16, start: u16) Symbol {
+        fn findLinked(self: *Self, code: u16, start: u16) Symbol {
             var pos = start;
             while (pos > 0) {
                 const sym = self.symbols[pos];
