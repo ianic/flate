@@ -123,7 +123,7 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
         }
 
         inline fn decodeLength(self: *Self, code: u8) !u16 {
-            assert(code <= 28);
+            if (code > 28) return error.CorruptInput;
             const ml = Token.matchLength(code);
             return if (ml.extra_bits == 0) // 0 - 5 extra bits
                 ml.base
@@ -132,7 +132,7 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
         }
 
         inline fn decodeDistance(self: *Self, code: u8) !u16 {
-            assert(code <= 29);
+            if (code > 29) return error.CorruptInput;
             const md = Token.matchDistance(code);
             return if (md.extra_bits == 0) // 0 - 13 extra bits
                 md.base
@@ -158,7 +158,7 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
             var pos: usize = 0;
             while (pos < hlit) {
                 const sym = cl_h.find(try self.bits.peekF(u7, F.reverse));
-                self.bits.shift(sym.code_bits);
+                try self.bits.shift(sym.code_bits);
                 pos += try self.dynamicCodeLength(sym.symbol, &lit_l, pos);
             }
 
@@ -167,7 +167,7 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
             pos = 0;
             while (pos < hdist) {
                 const sym = cl_h.find(try self.bits.peekF(u7, F.reverse));
-                self.bits.shift(sym.code_bits);
+                try self.bits.shift(sym.code_bits);
                 pos += try self.dynamicCodeLength(sym.symbol, &dst_l, pos);
             }
 
@@ -234,7 +234,7 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
         inline fn decodeSymbol(self: *Self, decoder: anytype) !hfd.Symbol {
             const sym = decoder.find(try self.bits.peekF(u15, F.buffered | F.reverse));
             if (sym.code_bits == 0) return error.CorruptInput;
-            self.bits.shift(sym.code_bits);
+            try self.bits.shift(sym.code_bits);
             return sym;
         }
 
@@ -474,21 +474,81 @@ test "zlib decompress" {
     }
 }
 
-test "lengths overflow" {
-    const data = "\xed\x1d$\xe9\xff\xff9\x0e";
+test "fuzzing tests" {
+    const cases = [_]struct {
+        in: []const u8,
+        out: []const u8 = "",
+        err: ?anyerror = null,
+    }{
+        .{ .in = @embedFile("testdata/fuzzing/deflate-stream"), .out =
+        \\[
+        \\    { id: "brieflz",
+        \\      name: "BriefLZ",
+        \\      libraryUrl: "https://github.com/jibsen/brieflz",
+        \\      license: "MIT",
+        \\      revision: "bcaa6a1ee7ccf005512b5c23aa92b40cf75f9ed1",
+        \\      codecs: [ { name: "brieflz" } ], },
+        \\    { id: "brotli",
+        \\      name: "Brotli",
+        \\      libraryUrl: "https://github.com/google/brotli",
+        \\      license: "Apache 2.0",
+        \\      revision: "1dd66ef114fd244778d9dcb5da09c28b49a0df33",
+        \\      codecs: [ { name: "brotli",
+        \\		  levels: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+        \\		  streaming: true } ], },
+        \\    { id: "bsc",
+        \\      name: "bsc",
+        \\      libraryUrl: "http://libbsc.com/",
+        \\      license: "Apache 2.0",
+        \\      revision: "b2b07421381b19b2fada8b291f3cdead10578abc",
+        \\      codecs: [ { name: "bsc" } ] }
+        \\]
+        \\
+        },
+        .{ .in = @embedFile("testdata/fuzzing/empty-distance-alphabet01"), .err = error.EndOfStream },
+        .{ .in = @embedFile("testdata/fuzzing/empty-distance-alphabet02"), .out = "" },
+        .{ .in = @embedFile("testdata/fuzzing/end-of-stream"), .err = error.EndOfStream },
+        .{ .in = @embedFile("testdata/fuzzing/invalid-distance"), .err = error.EndOfStream }, // panic
+        .{ .in = @embedFile("testdata/fuzzing/invalid-tree01"), .err = error.EndOfStream },
+        .{ .in = @embedFile("testdata/fuzzing/invalid-tree02"), .err = error.EndOfStream },
+        .{ .in = @embedFile("testdata/fuzzing/invalid-tree03"), .err = error.EndOfStream },
+        .{ .in = @embedFile("testdata/fuzzing/lengths-overflow"), .err = error.CorruptInput },
+        //.{ .in = "\xed\x1d$\xe9\xff\xff9\x0e", .err = error.CorruptInput },
 
-    var fb = std.io.fixedBufferStream(data);
-    var al = std.ArrayList(u8).init(testing.allocator);
-    defer al.deinit();
+        .{ .in = @embedFile("testdata/fuzzing/out-of-codes"), .err = error.CorruptInput },
+        //.{ .in = "\x950\x00\x0000000", .err = error.CorruptInput },
+        .{ .in = @embedFile("testdata/fuzzing/puff01"), .err = error.DeflateWrongNlen },
+        .{ .in = @embedFile("testdata/fuzzing/puff02"), .err = error.EndOfStream },
+        .{ .in = @embedFile("testdata/fuzzing/puff03"), .out = &[_]u8{0xa} },
+        .{ .in = @embedFile("testdata/fuzzing/puff04"), .err = error.CorruptInput }, // this was panicking
+        .{ .in = @embedFile("testdata/fuzzing/puff05"), .err = error.EndOfStream },
+        .{ .in = @embedFile("testdata/fuzzing/puff06"), .err = error.EndOfStream },
+        //.{ .in = @embedFile("testdata/fuzzing/puff07") }, // panic
+        .{ .in = @embedFile("testdata/fuzzing/puff08"), .err = error.CorruptInput },
+        //.{ .in = "\x04\xc0\x81\x08\x00\x00\x00\x00 \x7f\xeb\x0b\x00\x00", .err = error.CorruptInput },
+        .{ .in = @embedFile("testdata/fuzzing/puff09"), .out = "P" },
+        .{ .in = @embedFile("testdata/fuzzing/puff10"), .err = error.DeflateInvalidCode },
+        .{ .in = @embedFile("testdata/fuzzing/puff11"), .err = error.EndOfStream },
 
-    try testing.expectError(error.CorruptInput, decompress(.raw, fb.reader(), al.writer()));
-}
+        .{ .in = @embedFile("testdata/fuzzing/puff12"), .err = error.EndOfStream },
+        .{ .in = @embedFile("testdata/fuzzing/puff13"), .err = error.CorruptInput },
+        //.{ .in = "\x04\x00\xfe\xff", .err = error.CorruptInput },
+        .{ .in = @embedFile("testdata/fuzzing/puff14"), .err = error.CorruptInput },
+        .{ .in = @embedFile("testdata/fuzzing/puff15"), .err = error.EndOfStream },
+        .{ .in = @embedFile("testdata/fuzzing/puff16"), .err = error.EndOfStream }, // panic
+        .{ .in = @embedFile("testdata/fuzzing/puff17"), .err = error.EndOfStream },
+    };
 
-test "fix: infinite loop during 'out of codes'" {
-    const data = "\x950\x00\x0000000";
+    for (cases) |c| {
+        var fb = std.io.fixedBufferStream(c.in);
+        var al = std.ArrayList(u8).init(testing.allocator);
+        defer al.deinit();
 
-    var fb = std.io.fixedBufferStream(data);
-    var al = std.ArrayList(u8).init(testing.allocator);
-    defer al.deinit();
-    try testing.expectError(error.CorruptInput, decompress(.raw, fb.reader(), al.writer()));
+        if (c.err) |expected_err| {
+            try testing.expectError(expected_err, decompress(.raw, fb.reader(), al.writer()));
+        } else {
+            try decompress(.raw, fb.reader(), al.writer());
+            try testing.expectEqualStrings(c.out, al.items);
+        }
+    }
 }
