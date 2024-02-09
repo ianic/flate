@@ -26,6 +26,8 @@ pub fn BitReader(comptime ReaderType: type) type {
 
         const Self = @This();
 
+        pub const Error = ReaderType.Error || error{EndOfStream};
+
         pub fn init(rdr: ReaderType) Self {
             var self = Self{ .forward_reader = rdr };
             self.fill(1) catch {};

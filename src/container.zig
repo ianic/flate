@@ -42,11 +42,11 @@ pub const Container = enum {
     pub const list = [_]Container{ .raw, .gzip, .zlib };
 
     pub const Error = error{
-        GzipHeader,
-        ZlibHeader,
-        GzipFooterChecksum,
-        GzipFooterSize,
-        ZlibFooterChecksum,
+        BadGzipHeader,
+        BadZlibHeader,
+        WrongGzipChecksum,
+        WrongGzipSize,
+        WrongZlibChecksum,
     };
 
     pub fn writeHeader(comptime wrap: Container, writer: anytype) !void {
@@ -122,7 +122,7 @@ pub const Container = enum {
         const flags = try reader.read(u8);
         try reader.skipBytes(6); // mtime(4), xflags, os
         if (magic1 != 0x1f or magic2 != 0x8b or method != 0x08)
-            return error.GzipHeader;
+            return error.BadGzipHeader;
         // Flags description: https://www.rfc-editor.org/rfc/rfc1952.html#page-5
         if (flags != 0) {
             if (flags & 0b0000_0100 != 0) { // FEXTRA
@@ -145,19 +145,19 @@ pub const Container = enum {
         const cinfo_cm = try reader.read(u8);
         _ = try reader.read(u8);
         if (cinfo_cm != 0x78) {
-            return error.ZlibHeader;
+            return error.BadZlibHeader;
         }
     }
 
     pub fn parseFooter(comptime wrap: Container, hasher: *Hasher(wrap), reader: anytype) !void {
         switch (wrap) {
             .gzip => {
-                if (try reader.read(u32) != hasher.chksum()) return error.GzipFooterChecksum;
-                if (try reader.read(u32) != hasher.bytesRead()) return error.GzipFooterSize;
+                if (try reader.read(u32) != hasher.chksum()) return error.WrongGzipChecksum;
+                if (try reader.read(u32) != hasher.bytesRead()) return error.WrongGzipSize;
             },
             .zlib => {
                 const chksum: u32 = @byteSwap(hasher.chksum());
-                if (try reader.read(u32) != chksum) return error.ZlibFooterChecksum;
+                if (try reader.read(u32) != chksum) return error.WrongZlibChecksum;
             },
             .raw => {},
         }

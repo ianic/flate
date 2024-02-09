@@ -46,7 +46,7 @@ pub fn writeMatch(self: *Self, length: u16, distance: u16) !void {
         length < consts.base_length or length > consts.max_length or
         distance < consts.min_distance or distance > consts.max_distance)
     {
-        return error.CorruptInput;
+        return error.InvalidMatch;
     }
     assert(self.wp - self.rp < mask);
 

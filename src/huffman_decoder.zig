@@ -127,7 +127,7 @@ fn HuffmanDecoder(
                 if ((code ^ sym.code) >> shift == 0) return sym;
                 pos = sym.next;
             }
-            return error.CorruptInput;
+            return error.InvalidCode;
         }
     };
 }

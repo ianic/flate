@@ -69,12 +69,12 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
 
         const Self = @This();
 
-        pub const Error = ReaderType.Error || Container.Error || error{
-            EndOfStream,
-            DeflateInvalidCode,
-            DeflateInvalidBlockType,
-            DeflateWrongNlen,
-            CorruptInput,
+        pub const Error = BitReaderType.Error || Container.Error || error{
+            InvalidCode,
+            InvalidMatch,
+            InvalidBlockType,
+            WrongStoredBlockNlen,
+            BadDecoderState,
         };
 
         pub fn init(rt: ReaderType) Self {
@@ -90,7 +90,7 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
             self.bits.alignToByte(); // skip 5 bits padding (block header is 3 bits)
             var len = try self.bits.read(u16);
             const nlen = try self.bits.read(u16);
-            if (len != ~nlen) return error.DeflateWrongNlen;
+            if (len != ~nlen) return error.WrongStoredBlockNlen;
 
             while (len > 0) {
                 const buf = self.hist.getWritable(len);
@@ -107,7 +107,7 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
                     0...255 => self.hist.write(@intCast(code)),
                     256 => return true, // end of block
                     257...285 => try self.fixedDistanceCode(@intCast(code - 257)),
-                    else => return error.DeflateInvalidCode,
+                    else => return error.InvalidCode,
                 }
             }
             return false;
@@ -123,7 +123,7 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
         }
 
         inline fn decodeLength(self: *Self, code: u8) !u16 {
-            if (code > 28) return error.CorruptInput;
+            if (code > 28) return error.InvalidCode;
             const ml = Token.matchLength(code);
             return if (ml.extra_bits == 0) // 0 - 5 extra bits
                 ml.base
@@ -132,7 +132,7 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
         }
 
         fn decodeDistance(self: *Self, code: u8) !u16 {
-            if (code > 29) return error.CorruptInput;
+            if (code > 29) return error.InvalidCode;
             const md = Token.matchDistance(code);
             return if (md.extra_bits == 0) // 0 - 13 extra bits
                 md.base
@@ -180,7 +180,7 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
         // advanced.
         fn dynamicCodeLength(self: *Self, code: u16, lens: []u4, pos: usize) !usize {
             if (pos >= lens.len)
-                return error.CorruptInput;
+                return error.BadDecoderState;
 
             switch (code) {
                 0...15 => {
@@ -189,7 +189,7 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
                     return 1;
                 },
                 16 => {
-                    if (pos == 0) return error.CorruptInput;
+                    if (pos == 0) return error.BadDecoderState;
                     // Copy the previous code length 3 - 6 times.
                     // The next 2 bits indicate repeat length
                     const n: u8 = @as(u8, try self.bits.read(u2)) + 3;
@@ -202,7 +202,7 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
                 17 => return @as(u8, try self.bits.read(u3)) + 3,
                 // Repeat a code length of 0 for 11 - 138 times (7 bits of length)
                 18 => return @as(u8, try self.bits.read(u7)) + 11,
-                else => return error.CorruptInput,
+                else => return error.InvalidCode,
             }
         }
 
@@ -255,7 +255,7 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
                         0 => try self.storedBlock(),
                         1 => try self.fixedBlock(),
                         2 => try self.dynamicBlock(),
-                        else => return error.DeflateInvalidBlockType,
+                        else => return error.InvalidBlockType,
                     };
                     if (done) {
                         self.state = if (self.bfinal == 1) .protocol_footer else .block_header;
@@ -511,21 +511,21 @@ test "fuzzing tests" {
         .{ .in = @embedFile("testdata/fuzzing/invalid-tree01"), .err = error.EndOfStream },
         .{ .in = @embedFile("testdata/fuzzing/invalid-tree02"), .err = error.EndOfStream },
         .{ .in = @embedFile("testdata/fuzzing/invalid-tree03"), .err = error.EndOfStream },
-        .{ .in = @embedFile("testdata/fuzzing/lengths-overflow"), .err = error.CorruptInput },
-        .{ .in = @embedFile("testdata/fuzzing/out-of-codes"), .err = error.CorruptInput },
-        .{ .in = @embedFile("testdata/fuzzing/puff01"), .err = error.DeflateWrongNlen },
+        .{ .in = @embedFile("testdata/fuzzing/lengths-overflow"), .err = error.BadDecoderState },
+        .{ .in = @embedFile("testdata/fuzzing/out-of-codes"), .err = error.InvalidCode },
+        .{ .in = @embedFile("testdata/fuzzing/puff01"), .err = error.WrongStoredBlockNlen },
         .{ .in = @embedFile("testdata/fuzzing/puff02"), .err = error.EndOfStream },
         .{ .in = @embedFile("testdata/fuzzing/puff03"), .out = &[_]u8{0xa} },
-        .{ .in = @embedFile("testdata/fuzzing/puff04"), .err = error.CorruptInput },
+        .{ .in = @embedFile("testdata/fuzzing/puff04"), .err = error.InvalidCode },
         .{ .in = @embedFile("testdata/fuzzing/puff05"), .err = error.EndOfStream },
         .{ .in = @embedFile("testdata/fuzzing/puff06"), .err = error.EndOfStream },
-        .{ .in = @embedFile("testdata/fuzzing/puff08"), .err = error.CorruptInput },
+        .{ .in = @embedFile("testdata/fuzzing/puff08"), .err = error.InvalidCode },
         .{ .in = @embedFile("testdata/fuzzing/puff09"), .out = "P" },
-        .{ .in = @embedFile("testdata/fuzzing/puff10"), .err = error.DeflateInvalidCode },
+        .{ .in = @embedFile("testdata/fuzzing/puff10"), .err = error.InvalidCode },
         .{ .in = @embedFile("testdata/fuzzing/puff11"), .err = error.EndOfStream },
         .{ .in = @embedFile("testdata/fuzzing/puff12"), .err = error.EndOfStream },
-        .{ .in = @embedFile("testdata/fuzzing/puff13"), .err = error.CorruptInput },
-        .{ .in = @embedFile("testdata/fuzzing/puff14"), .err = error.CorruptInput },
+        .{ .in = @embedFile("testdata/fuzzing/puff13"), .err = error.InvalidCode },
+        .{ .in = @embedFile("testdata/fuzzing/puff14"), .err = error.BadDecoderState },
         .{ .in = @embedFile("testdata/fuzzing/puff15"), .err = error.EndOfStream },
         .{ .in = @embedFile("testdata/fuzzing/puff16"), .err = error.EndOfStream },
         .{ .in = @embedFile("testdata/fuzzing/puff17"), .err = error.EndOfStream },
