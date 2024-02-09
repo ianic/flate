@@ -51,8 +51,8 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
         hasher: container.Hasher() = .{},
 
         // dynamic block huffman code decoders
-        lit_h: hfd.LiteralDecoder = .{}, // literals
-        dst_h: hfd.DistanceDecoder = .{}, // distances
+        lit_dec: hfd.LiteralDecoder = .{}, // literals
+        dst_dec: hfd.DistanceDecoder = .{}, // distances
 
         // current read state
         bfinal: u1 = 0,
@@ -146,41 +146,42 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
             const hclen: u8 = @as(u8, try self.bits.read(u4)) + 4; // hclen + 4 code lenths are encoded
 
             // lengths for code lengths
-            var cl_l = [_]u4{0} ** 19;
+            var cl_lens = [_]u4{0} ** 19;
             for (0..hclen) |i| {
-                cl_l[codegen_order[i]] = try self.bits.read(u3);
+                cl_lens[codegen_order[i]] = try self.bits.read(u3);
             }
-            var cl_h: hfd.CodegenDecoder = .{};
-            cl_h.generate(&cl_l);
+            var cl_dec: hfd.CodegenDecoder = .{};
+            cl_dec.generate(&cl_lens);
 
             // literal code lengths
-            var lit_l = [_]u4{0} ** (286);
+            var lit_lens = [_]u4{0} ** (286);
             var pos: usize = 0;
             while (pos < hlit) {
-                const sym = cl_h.find(try self.bits.peekF(u7, F.reverse));
+                const sym = try cl_dec.find(try self.bits.peekF(u7, F.reverse));
                 try self.bits.shift(sym.code_bits);
-                pos += try self.dynamicCodeLength(sym.symbol, &lit_l, pos);
+                pos += try self.dynamicCodeLength(sym.symbol, &lit_lens, pos);
             }
 
             // distance code lenths
-            var dst_l = [_]u4{0} ** (30);
+            var dst_lens = [_]u4{0} ** (30);
             pos = 0;
             while (pos < hdist) {
-                const sym = cl_h.find(try self.bits.peekF(u7, F.reverse));
+                const sym = try cl_dec.find(try self.bits.peekF(u7, F.reverse));
                 try self.bits.shift(sym.code_bits);
-                pos += try self.dynamicCodeLength(sym.symbol, &dst_l, pos);
+                pos += try self.dynamicCodeLength(sym.symbol, &dst_lens, pos);
             }
 
-            self.lit_h.generate(&lit_l);
-            self.dst_h.generate(&dst_l);
+            self.lit_dec.generate(&lit_lens);
+            self.dst_dec.generate(&dst_lens);
         }
 
         // Decode code length symbol to code length. Writes decoded length into
         // lens slice starting at position pos. Returns number of positions
         // advanced.
         fn dynamicCodeLength(self: *Self, code: u16, lens: []u4, pos: usize) !usize {
-            if (pos >= lens.len or code > 18)
+            if (pos >= lens.len)
                 return error.CorruptInput;
+
             switch (code) {
                 0...15 => {
                     // Represent code lengths of 0 - 15
@@ -201,7 +202,7 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
                 17 => return @as(u8, try self.bits.read(u3)) + 3,
                 // Repeat a code length of 0 for 11 - 138 times (7 bits of length)
                 18 => return @as(u8, try self.bits.read(u7)) + 11,
-                else => unreachable,
+                else => return error.CorruptInput,
             }
         }
 
@@ -211,14 +212,14 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
             // Hot path loop!
             while (!self.hist.full()) {
                 try self.bits.fill(15); // optimization so other bit reads can be buffered (avoiding one `if` in hot path)
-                const sym = try self.decodeSymbol(&self.lit_h);
+                const sym = try self.decodeSymbol(&self.lit_dec);
 
                 switch (sym.kind) {
                     .literal => self.hist.write(sym.symbol),
                     .match => { // Decode match backreference <length, distance>
                         try self.bits.fill(5 + 15 + 13); // so we can use buffered reads
                         const length = try self.decodeLength(sym.symbol);
-                        const dsm = try self.decodeSymbol(&self.dst_h);
+                        const dsm = try self.decodeSymbol(&self.dst_dec);
                         const distance = try self.decodeDistance(dsm.symbol);
                         try self.hist.writeMatch(length, distance);
                     },
@@ -233,8 +234,7 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
         // used. Shift bit reader for that much bits, those bits are used. And
         // return symbol.
         fn decodeSymbol(self: *Self, decoder: anytype) !hfd.Symbol {
-            const sym = decoder.find(try self.bits.peekF(u15, F.buffered | F.reverse));
-            if (sym.code_bits == 0) return error.CorruptInput;
+            const sym = try decoder.find(try self.bits.peekF(u15, F.buffered | F.reverse));
             try self.bits.shift(sym.code_bits);
             return sym;
         }
@@ -243,7 +243,6 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
             switch (self.state) {
                 .protocol_header => {
                     try container.parseHeader(&self.bits);
-
                     self.state = .block_header;
                 },
                 .block_header => {
@@ -264,7 +263,6 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
                 },
                 .protocol_footer => {
                     self.bits.alignToByte();
-
                     try container.parseFooter(&self.hasher, &self.bits);
                     self.state = .end;
                 },

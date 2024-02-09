@@ -9,10 +9,10 @@ pub const Symbol = packed struct {
     };
 
     symbol: u8 = 0, // symbol from alphabet
-    code_bits: u4 = 0, // code bits count
+    code_bits: u4 = 0, // number of bits in code 0-15
     kind: Kind = .literal,
 
-    code: u16 = 0,
+    code: u16 = 0, // huffman code of the symbol
     next: u16 = 0, // pointer to the next symbol in linked list
     // it is safe to use 0 as null pointer, when sorted 0 has shortest code and fits into lookup
 
@@ -60,7 +60,7 @@ fn HuffmanDecoder(
 
         const Self = @This();
 
-        /// Builds symbols and lookup tables from list of code lens for each symbol.
+        /// Generates symbols and lookup tables from list of code lens for each symbol.
         pub fn generate(self: *Self, lens: []const u4) void {
             // init alphabet with code_bits
             for (self.symbols, 0..) |_, i| {
@@ -109,7 +109,7 @@ fn HuffmanDecoder(
         }
 
         /// Finds symbol for lookup table code.
-        pub fn find(self: *Self, code: u16) Symbol {
+        pub fn find(self: *Self, code: u16) !Symbol {
             // try to find in lookup table
             const idx = code >> lookup_shift;
             const sym = self.lookup[idx];
@@ -118,7 +118,7 @@ fn HuffmanDecoder(
             return self.findLinked(code, sym.next);
         }
 
-        inline fn findLinked(self: *Self, code: u16, start: u16) Symbol {
+        inline fn findLinked(self: *Self, code: u16, start: u16) !Symbol {
             var pos = start;
             while (pos > 0) {
                 const sym = self.symbols[pos];
@@ -127,7 +127,7 @@ fn HuffmanDecoder(
                 if ((code ^ sym.code) >> shift == 0) return sym;
                 pos = sym.next;
             }
-            return .{};
+            return error.CorruptInput;
         }
     };
 }
@@ -180,32 +180,32 @@ test "Huffman init/find" {
     for (expected, 12..) |e, i| {
         try testing.expectEqual(e.sym.symbol, h.symbols[i].symbol);
         try testing.expectEqual(e.sym.code_bits, h.symbols[i].code_bits);
-        const sym_from_code = h.find(e.code);
+        const sym_from_code = try h.find(e.code);
         try testing.expectEqual(e.sym.symbol, sym_from_code.symbol);
     }
 
     // All possible codes for each symbol.
     // Lookup table has 126 elements, to cover all possible 7 bit codes.
     for (0b0000_000..0b0100_000) |c| // 0..32 (32)
-        try testing.expectEqual(3, h.find(@intCast(c)).symbol);
+        try testing.expectEqual(3, (try h.find(@intCast(c))).symbol);
 
     for (0b0100_000..0b1000_000) |c| // 32..64 (32)
-        try testing.expectEqual(18, h.find(@intCast(c)).symbol);
+        try testing.expectEqual(18, (try h.find(@intCast(c))).symbol);
 
     for (0b1000_000..0b1010_000) |c| // 64..80 (16)
-        try testing.expectEqual(1, h.find(@intCast(c)).symbol);
+        try testing.expectEqual(1, (try h.find(@intCast(c))).symbol);
 
     for (0b1010_000..0b1100_000) |c| // 80..96 (16)
-        try testing.expectEqual(4, h.find(@intCast(c)).symbol);
+        try testing.expectEqual(4, (try h.find(@intCast(c))).symbol);
 
     for (0b1100_000..0b1110_000) |c| // 96..112 (16)
-        try testing.expectEqual(17, h.find(@intCast(c)).symbol);
+        try testing.expectEqual(17, (try h.find(@intCast(c))).symbol);
 
     for (0b1110_000..0b1111_000) |c| // 112..120 (8)
-        try testing.expectEqual(0, h.find(@intCast(c)).symbol);
+        try testing.expectEqual(0, (try h.find(@intCast(c))).symbol);
 
     for (0b1111_000..0b1_0000_000) |c| // 120...128 (8)
-        try testing.expectEqual(16, h.find(@intCast(c)).symbol);
+        try testing.expectEqual(16, (try h.find(@intCast(c))).symbol);
 }
 
 const print = std.debug.print;
@@ -250,7 +250,7 @@ test "full " {
         if (c.len == 0) continue;
 
         const s_code: u15 = @bitReverse(@as(u15, @intCast(c.code)));
-        const s = dec.find(s_code);
+        const s = try dec.find(s_code);
         try expect(s.code == s_code);
         try expect(s.code_bits == c.len);
     }
