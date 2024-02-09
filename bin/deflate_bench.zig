@@ -40,9 +40,17 @@ pub fn run(output: anytype, opt: Options) !void {
     } else {
         if (opt.level == 0) {
             switch (opt.alg) {
-                .deflate => try raw.compressHuffmanOnly(input, output),
-                .zlib => try zlib.compressHuffmanOnly(input, output),
-                .gzip => try gzip.compressHuffmanOnly(input, output),
+                .deflate => try raw.storeCompress(input, output),
+                .zlib => try zlib.storeCompress(input, output),
+                .gzip => try gzip.storeCompress(input, output),
+            }
+            return;
+        }
+        if (opt.level == 1) {
+            switch (opt.alg) {
+                .deflate => try raw.huffmanCompress(input, output),
+                .zlib => try zlib.huffmanCompress(input, output),
+                .gzip => try gzip.huffmanCompress(input, output),
             }
             return;
         }
@@ -136,8 +144,8 @@ pub fn readArgs() !?Options {
         if (std.mem.eql(u8, a, "-l")) {
             if (args.next()) |i| {
                 opt.level = try std.fmt.parseInt(u8, i, 10);
-                if (!(opt.level == 0 or (opt.level >= 4 and opt.level <= 9))) {
-                    print("Compression level must be in range 4-9 or 0 for huffman only!\n", .{});
+                if (!(opt.level == 0 or opt.level == 1 or (opt.level >= 4 and opt.level <= 9))) {
+                    print("Compression level must be in range 4-9 or 0 for store, 1 for huffman only!\n", .{});
                     return error.InvalidArgs;
                 }
             } else {

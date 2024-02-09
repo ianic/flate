@@ -1,5 +1,6 @@
 const std = @import("std");
 const io = std.io;
+const assert = std.debug.assert;
 
 const hc = @import("huffman_encoder.zig");
 const consts = @import("consts.zig").huffman;
@@ -227,7 +228,7 @@ pub fn BlockWriter(comptime WriterType: type) type {
         //  num_distances: The number of distances specified in codegen
         //  num_codegens: The number of codegens used in codegen
         //  eof: Is it the end-of-file? (end of stream)
-        fn writeDynamicHeader(
+        fn dynamicHeader(
             self: *Self,
             num_literals: u32,
             num_distances: u32,
@@ -273,7 +274,8 @@ pub fn BlockWriter(comptime WriterType: type) type {
             }
         }
 
-        fn writeStoredHeader(self: *Self, length: usize, eof: bool) Error!void {
+        fn storedHeader(self: *Self, length: usize, eof: bool) Error!void {
+            assert(length <= 65535);
             const flag: u32 = if (eof) 1 else 0;
             try self.bit_writer.writeBits(flag, 3);
             try self.flush();
@@ -282,7 +284,7 @@ pub fn BlockWriter(comptime WriterType: type) type {
             try self.bit_writer.writeBits(~l, 16);
         }
 
-        fn writeFixedHeader(self: *Self, eof: bool) Error!void {
+        fn fixedHeader(self: *Self, eof: bool) Error!void {
             // Indicate that we are a fixed Huffman block
             var value: u32 = 2;
             if (eof) {
@@ -291,17 +293,12 @@ pub fn BlockWriter(comptime WriterType: type) type {
             try self.bit_writer.writeBits(value, 3);
         }
 
-        // Write a block of tokens with the smallest encoding.
+        // Write a block of tokens with the smallest encoding. Will choose block type.
         // The original input can be supplied, and if the huffman encoded data
         // is larger than the original bytes, the data will be written as a
         // stored block.
         // If the input is null, the tokens will always be Huffman encoded.
-        pub fn writeBlock(
-            self: *Self,
-            tokens: []const Token,
-            eof: bool,
-            input: ?[]const u8,
-        ) Error!void {
+        pub fn write(self: *Self, tokens: []const Token, eof: bool, input: ?[]const u8) Error!void {
             const lit_and_dist = self.indexTokens(tokens);
             const num_literals = lit_and_dist.num_literals;
             const num_distances = lit_and_dist.num_distances;
@@ -364,23 +361,23 @@ pub fn BlockWriter(comptime WriterType: type) type {
 
             // Stored bytes?
             if (storable and stored_size < size) {
-                try self.writeBlockStored(input.?, eof);
+                try self.storedBlock(input.?, eof);
                 return;
             }
 
             // Huffman.
             if (@intFromPtr(literal_encoding) == @intFromPtr(&self.fixed_literal_encoding)) {
-                try self.writeFixedHeader(eof);
+                try self.fixedHeader(eof);
             } else {
-                try self.writeDynamicHeader(num_literals, num_distances, num_codegens, eof);
+                try self.dynamicHeader(num_literals, num_distances, num_codegens, eof);
             }
 
             // Write the tokens.
             try self.writeTokens(tokens, &literal_encoding.codes, &distance_encoding.codes);
         }
 
-        pub fn writeBlockStored(self: *Self, input: []const u8, eof: bool) Error!void {
-            try self.writeStoredHeader(input.len, eof);
+        pub fn storedBlock(self: *Self, input: []const u8, eof: bool) Error!void {
+            try self.storedHeader(input.len, eof);
             try self.bit_writer.writeBytes(input);
         }
 
@@ -389,7 +386,7 @@ pub fn BlockWriter(comptime WriterType: type) type {
         // histogram distribution.
         // If input is supplied and the compression savings are below 1/16th of the
         // input size the block is stored.
-        fn writeBlockDynamic(
+        fn dynamicBlock(
             self: *Self,
             tokens: []const Token,
             eof: bool,
@@ -418,12 +415,12 @@ pub fn BlockWriter(comptime WriterType: type) type {
             const ssize = stored_size.size;
             const storable = stored_size.storable;
             if (storable and ssize < (size + (size >> 4))) {
-                try self.writeBlockStored(input.?, eof);
+                try self.storedBlock(input.?, eof);
                 return;
             }
 
             // Write Huffman table.
-            try self.writeDynamicHeader(num_literals, num_distances, num_codegens, eof);
+            try self.dynamicHeader(num_literals, num_distances, num_codegens, eof);
 
             // Write the tokens.
             try self.writeTokens(tokens, &self.literal_encoding.codes, &self.distance_encoding.codes);
@@ -518,7 +515,7 @@ pub fn BlockWriter(comptime WriterType: type) type {
 
         // Encodes a block of bytes as either Huffman encoded literals or uncompressed bytes
         // if the results only gains very little from compression.
-        pub fn writeBlockHuff(self: *Self, eof: bool, input: []const u8) Error!void {
+        pub fn huffmanBlock(self: *Self, input: []const u8, eof: bool) Error!void {
             // Add everything as literals
             histogram(input, &self.literal_freq);
 
@@ -553,12 +550,12 @@ pub fn BlockWriter(comptime WriterType: type) type {
             const storable = stored_size_ret.storable;
 
             if (storable and ssize < (size + (size >> 4))) {
-                try self.writeBlockStored(input, eof);
+                try self.storedBlock(input, eof);
                 return;
             }
 
             // Huffman.
-            try self.writeDynamicHeader(num_literals, num_distances, num_codegens, eof);
+            try self.dynamicHeader(num_literals, num_distances, num_codegens, eof);
             const encoding = self.literal_encoding.codes[0..257];
 
             for (input) |t| {
@@ -638,9 +635,9 @@ const TestFn = enum {
         final: bool,
     ) !void {
         switch (self) {
-            .write_block => try bw.writeBlock(tok, final, input),
-            .write_dyn_block => try bw.writeBlockDynamic(tok, final, input),
-            .write_huffman_block => try bw.writeBlockHuff(final, input.?),
+            .write_block => try bw.write(tok, final, input),
+            .write_dyn_block => try bw.dynamicBlock(tok, final, input),
+            .write_huffman_block => try bw.huffmanBlock(input.?, final),
         }
         try bw.flush();
     }

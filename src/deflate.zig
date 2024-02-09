@@ -261,7 +261,7 @@ fn Deflate(comptime container: Container, comptime WriterType: type, comptime Bl
         }
 
         fn flushTokens(self: *Self, final: bool) !void {
-            try self.block_writer.writeBlock(self.tokens.tokens(), final, self.win.tokensBuffer());
+            try self.block_writer.write(self.tokens.tokens(), final, self.win.tokensBuffer());
             try self.block_writer.flush();
             self.tokens.reset();
             self.win.flush();
@@ -353,22 +353,65 @@ const Tokens = struct {
     }
 };
 
-pub fn huffmanOnlyCompressor(comptime container: Container, writer: anytype) !HuffmanOnlyCompressor(
-    container,
-    @TypeOf(writer),
-) {
-    return try HuffmanOnlyCompressor(container, @TypeOf(writer)).init(writer);
-}
-
 /// Creates huffman only deflate blocks. Disables Lempel-Ziv match searching and
 /// only performs Huffman entropy encoding. Results in faster compression, much
 /// less memory requirements during compression but bigger compressed sizes.
 ///
-/// Allocates ~11.2K
+pub fn HuffmanCompressor(comptime container: Container, comptime WriterType: type) type {
+    return SimpleCompressor(.huffman, container, WriterType);
+}
+
+pub fn huffmanCompressor(comptime container: Container, writer: anytype) !HuffmanCompressor(container, @TypeOf(writer)) {
+    return try HuffmanCompressor(container, @TypeOf(writer)).init(writer);
+}
+
+pub fn huffmanCompress(comptime container: Container, reader: anytype, writer: anytype) !void {
+    var c = try huffmanCompressor(container, writer);
+    try c.compress(reader);
+    try c.close();
+}
+
+/// Creates store blocks only. Data are not compressed only packed into deflate
+/// store blocks. That adds 9 bytes of header for each block. Max stored block
+/// size is 64K. Block is emitted when flush is called on on close.
 ///
-pub fn HuffmanOnlyCompressor(comptime container: Container, comptime WriterType: type) type {
+pub fn StoreCompressor(comptime container: Container, comptime WriterType: type) type {
+    return SimpleCompressor(.store, container, WriterType);
+}
+
+pub fn storeCompressor(comptime container: Container, writer: anytype) !StoreCompressor(container, @TypeOf(writer)) {
+    return try StoreCompressor(container, @TypeOf(writer)).init(writer);
+}
+
+pub fn storeCompress(comptime container: Container, reader: anytype, writer: anytype) !void {
+    var c = try storeCompressor(container, writer);
+    try c.compress(reader);
+    try c.close();
+}
+
+const SimpleCompressorKind = enum {
+    huffman,
+    store,
+};
+
+fn simpleCompressor(
+    comptime kind: SimpleCompressorKind,
+    comptime container: Container,
+    writer: anytype,
+) !SimpleCompressor(kind, container, @TypeOf(writer)) {
+    return try SimpleCompressor(kind, container, @TypeOf(writer)).init(writer);
+}
+
+fn SimpleCompressor(
+    comptime kind: SimpleCompressorKind,
+    comptime container: Container,
+    comptime WriterType: type,
+) type {
     const BlockWriterType = BlockWriter(WriterType);
     return struct {
+        buffer: [65535]u8 = undefined, // because store blocks are limited to 65535 bytes
+        wp: usize = 0,
+
         wrt: WriterType,
         block_writer: BlockWriterType,
         hasher: container.Hasher() = .{},
@@ -384,15 +427,57 @@ pub fn HuffmanOnlyCompressor(comptime container: Container, comptime WriterType:
             return self;
         }
 
+        pub fn flush(self: *Self) !void {
+            try self.flushBuffer(false);
+        }
+
         pub fn close(self: *Self) !void {
-            try self.block_writer.writeBlockStored("", true);
-            try self.block_writer.flush();
+            try self.flushBuffer(true);
             try container.writeFooter(&self.hasher, self.wrt);
         }
 
-        pub fn writeBlock(self: *Self, input: []const u8) !void {
-            self.hasher.update(input);
-            try self.block_writer.writeBlockHuff(false, input);
+        fn flushBuffer(self: *Self, final: bool) !void {
+            const buf = self.buffer[0..self.wp];
+            switch (kind) {
+                .huffman => try self.block_writer.huffmanBlock(buf, final),
+                .store => try self.block_writer.storedBlock(buf, final),
+            }
+            try self.block_writer.flush();
+            self.wp = 0;
+        }
+
+        // Writes all data from the input reader of uncompressed data.
+        // It is up to the caller to call flush or close if there is need to
+        // output compressed blocks.
+        pub fn compress(self: *Self, reader: anytype) !void {
+            while (true) {
+                // read from rdr into buffer
+                const buf = self.buffer[self.wp..];
+                if (buf.len == 0) {
+                    try self.flushBuffer(false);
+                    continue;
+                }
+                const n = try reader.readAll(buf);
+                self.hasher.update(buf[0..n]);
+                self.wp += n;
+                if (n < buf.len) break; // no more data in reader
+            }
+        }
+
+        // Writer interface
+
+        pub const Writer = io.Writer(*Self, Error, write);
+        pub const Error = BlockWriterType.Error;
+
+        // Write `input` of uncompressed data.
+        pub fn write(self: *Self, input: []const u8) !usize {
+            var fbs = io.fixedBufferStream(input);
+            try self.compress(fbs.reader());
+            return input.len;
+        }
+
+        pub fn writer(self: *Self) Writer {
+            return .{ .context = self };
         }
     };
 }
@@ -448,7 +533,7 @@ const TestTokenWriter = struct {
     pub fn init(_: anytype) Self {
         return .{};
     }
-    pub fn writeBlock(self: *Self, tokens: []const Token, _: bool, _: ?[]const u8) !void {
+    pub fn write(self: *Self, tokens: []const Token, _: bool, _: ?[]const u8) !void {
         for (tokens) |t| {
             self.actual[self.pos] = t;
             self.pos += 1;
@@ -503,9 +588,12 @@ test "check struct sizes" {
     // var cmp = try std.compress.deflate.compressor(allocator, io.null_writer, .{});
     // defer cmp.deinit();
 
-    const HOC = HuffmanOnlyCompressor(.raw, @TypeOf(io.null_writer));
-    try expect(@sizeOf(HOC) == 11480);
+    const HOC = HuffmanCompressor(.raw, @TypeOf(io.null_writer));
     //print("size of HOC {d}\n", .{@sizeOf(HOC)});
+    try expect(@sizeOf(HOC) == 77024);
+    // 64K buffer
+    // 11480 huffman_encoded
+    // 8 buffer write pointer
 }
 
 test "deflate file tokenization" {
@@ -583,7 +671,7 @@ fn TokenDecoder(comptime WriterType: type) type {
             return .{ .wrt = wrt };
         }
 
-        pub fn writeBlock(self: *Self, tokens: []const Token, _: bool, _: ?[]const u8) !void {
+        pub fn write(self: *Self, tokens: []const Token, _: bool, _: ?[]const u8) !void {
             self.tokens_count += tokens.len;
             for (tokens) |t| {
                 switch (t.kind) {
@@ -605,4 +693,33 @@ fn TokenDecoder(comptime WriterType: type) type {
 
         pub fn flush(_: *Self) !void {}
     };
+}
+
+test "store simple compressor" {
+    const data = "Hello world!";
+    const expected = [_]u8{
+        0x1, // block type 0, final bit set
+        0xc, 0x0, // len = 12
+        0xf3, 0xff, // ~len
+        'H', 'e', 'l', 'l', 'o', ' ', 'w', 'o', 'r', 'l', 'd', '!', //
+        //0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x77, 0x6f, 0x72, 0x6c, 0x64, 0x21,
+    };
+
+    var fbs = std.io.fixedBufferStream(data);
+    var al = std.ArrayList(u8).init(testing.allocator);
+    defer al.deinit();
+
+    var cmp = try storeCompressor(.raw, al.writer());
+    try cmp.compress(fbs.reader());
+    try cmp.close();
+    try testing.expectEqualSlices(u8, &expected, al.items);
+
+    fbs.reset();
+    try al.resize(0);
+
+    // huffman only compresoor will also emit store block for this small sample
+    var hc = try huffmanCompressor(.raw, al.writer());
+    try hc.compress(fbs.reader());
+    try hc.close();
+    try testing.expectEqualSlices(u8, &expected, al.items);
 }
