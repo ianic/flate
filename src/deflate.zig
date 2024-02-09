@@ -588,7 +588,7 @@ fn TokenDecoder(comptime WriterType: type) type {
             for (tokens) |t| {
                 switch (t.kind) {
                     .literal => self.hist.write(t.literal()),
-                    .match => self.hist.writeMatch(t.length(), t.distance()),
+                    .match => try self.hist.writeMatch(t.length(), t.distance()),
                 }
                 if (self.hist.free() < 285) try self.flushWin();
             }

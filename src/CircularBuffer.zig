@@ -17,6 +17,8 @@ const std = @import("std");
 const assert = std.debug.assert;
 const testing = std.testing;
 
+const consts = @import("consts.zig").match;
+
 const mask = 0xffff; // 64K - 1
 const buffer_len = mask + 1; // 64K buffer
 
@@ -39,9 +41,14 @@ pub fn write(self: *Self, b: u8) void {
 
 // Write match (back-reference to the same data slice) starting at `distance`
 // back from current write position, and `length` of bytes.
-pub fn writeMatch(self: *Self, length: u16, distance: u16) void {
+pub fn writeMatch(self: *Self, length: u16, distance: u16) !void {
+    if (self.wp < distance or
+        length < consts.base_length or length > consts.max_length or
+        distance < consts.min_distance or distance > consts.max_distance)
+    {
+        return error.CorruptInput;
+    }
     assert(self.wp - self.rp < mask);
-    assert(self.wp >= distance);
 
     var from: usize = self.wp - distance;
     const from_end: usize = from + length;
@@ -127,17 +134,17 @@ test "CircularBuffer copy" {
     var sw: Self = .{};
 
     sw.writeAll("a salad; ");
-    sw.writeMatch(5, 9);
-    sw.writeMatch(2, 3);
+    try sw.writeMatch(5, 9);
+    try sw.writeMatch(3, 3);
 
-    try testing.expectEqualStrings("a salad; a salsa", sw.read());
+    try testing.expectEqualStrings("a salad; a salsal", sw.read());
 }
 
 test "CircularBuffer copy overlap" {
     var sw: Self = .{};
 
     sw.writeAll("a b c ");
-    sw.writeMatch(8, 4);
+    try sw.writeMatch(8, 4);
     sw.write('d');
 
     try testing.expectEqualStrings("a b c b c b c d", sw.read());
@@ -147,7 +154,7 @@ test "CircularBuffer readAtMost" {
     var sw: Self = .{};
 
     sw.writeAll("0123456789");
-    sw.writeMatch(50, 10);
+    try sw.writeMatch(50, 10);
 
     try testing.expectEqualStrings("0123456789" ** 6, sw.buffer[sw.rp..sw.wp]);
     for (0..6) |i| {
@@ -167,7 +174,9 @@ test "CircularBuffer circular buffer" {
     try testing.expectEqual(@as(usize, 1024), sw.wp);
     try testing.expectEqual(@as(usize, 1024 * 63), sw.free());
 
-    sw.writeMatch(62 * 1024, 1024);
+    for (0..62 * 4) |_|
+        try sw.writeMatch(256, 1024); // write 62K
+
     try testing.expectEqual(@as(usize, 0), sw.rp);
     try testing.expectEqual(@as(usize, 63 * 1024), sw.wp);
     try testing.expectEqual(@as(usize, 1024), sw.free());
@@ -215,11 +224,11 @@ test "CircularBuffer copy over border" {
     sw.rp = sw.wp;
 
     sw.writeAll("0123456789");
-    sw.writeMatch(15, 5);
+    try sw.writeMatch(15, 5);
 
     try testing.expectEqualStrings("012345678956789", sw.read());
     try testing.expectEqualStrings("5678956789", sw.read());
 
-    sw.writeMatch(20, 25);
+    try sw.writeMatch(20, 25);
     try testing.expectEqualStrings("01234567895678956789", sw.read());
 }

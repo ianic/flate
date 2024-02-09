@@ -49,6 +49,7 @@ pub fn build(b: *std.Build) void {
     const binaries = [_]Binary{
         .{ .name = "gzip", .src = "bin/gzip.zig" },
         .{ .name = "gunzip", .src = "bin/gunzip.zig" },
+        .{ .name = "decompress", .src = "bin/decompress.zig" },
     };
     for (binaries) |i| {
         const bin = b.addExecutable(.{

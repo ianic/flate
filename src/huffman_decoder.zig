@@ -90,6 +90,7 @@ fn HuffmanDecoder(
                 const next_code = code + (@as(u16, 1) << (max_code_bits - sym.code_bits));
                 const next_idx = next_code >> lookup_shift;
 
+                if (next_idx > self.lookup.len or idx >= self.lookup.len) break;
                 if (sym.code_bits <= lookup_bits) {
                     // fill small lookup table
                     for (idx..next_idx) |j|

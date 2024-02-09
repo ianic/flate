@@ -119,7 +119,7 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
             try self.bits.fill(5 + 5 + 13);
             const length = try self.decodeLength(code);
             const distance = try self.decodeDistance(try self.bits.readF(u5, F.buffered));
-            self.hist.writeMatch(length, distance);
+            try self.hist.writeMatch(length, distance);
         }
 
         inline fn decodeLength(self: *Self, code: u8) !u16 {
@@ -179,7 +179,8 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
         // lens slice starting at position pos. Returns number of positions
         // advanced.
         fn dynamicCodeLength(self: *Self, code: u16, lens: []u4, pos: usize) !usize {
-            assert(code <= 18);
+            if (pos >= lens.len or code > 18)
+                return error.CorruptInput;
             switch (code) {
                 0...15 => {
                     // Represent code lengths of 0 - 15
@@ -219,7 +220,7 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
                         const length = try self.decodeLength(sym.symbol);
                         const dsm = try self.decodeSymbol(&self.dst_h);
                         const distance = try self.decodeDistance(dsm.symbol);
-                        self.hist.writeMatch(length, distance);
+                        try self.hist.writeMatch(length, distance);
                     },
                     .end_of_block => return true,
                 }
