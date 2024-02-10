@@ -189,19 +189,19 @@ test "compress/decompress" {
             .store_size = 36967,
         },
         .{
-            .data = @embedFile("testdata/fuzzing/roundtrip1"),
+            .data = @embedFile("testdata/fuzz/roundtrip1"),
             .gzip_sizes = [_]usize{ 373, 370, 370, 370, 370, 370 },
             .huffman_only_size = 393,
             .store_size = 393,
         },
         .{
-            .data = @embedFile("testdata/fuzzing/roundtrip2"),
+            .data = @embedFile("testdata/fuzz/roundtrip2"),
             .gzip_sizes = [_]usize{ 373, 373, 373, 373, 373, 373 },
             .huffman_only_size = 394,
             .store_size = 394,
         },
         .{
-            .data = @embedFile("testdata/fuzzing/deflate-stream-out"),
+            .data = @embedFile("testdata/fuzz/deflate-stream-out"),
             .gzip_sizes = [_]usize{ 351, 347, 347, 347, 347, 347 },
             .huffman_only_size = 498,
             .store_size = 747,

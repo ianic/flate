@@ -19,7 +19,7 @@ pub fn build(b: *std.Build) void {
         .name = "deflate",
         // In this case the main source file is merely a path, however, in more
         // complicated build scripts, this could be a generated file.
-        .root_source_file = .{ .path = "src/root.zig" },
+        .root_source_file = .{ .path = "src/flate.zig" },
         .target = target,
         .optimize = optimize,
     });
@@ -32,7 +32,7 @@ pub fn build(b: *std.Build) void {
     // Creates a step for unit testing. This only builds the test executable
     // but does not run it.
     const lib_unit_tests = b.addTest(.{
-        .root_source_file = .{ .path = "src/root.zig" },
+        .root_source_file = .{ .path = "src/flate.zig" },
         .target = target,
         .optimize = optimize,
     });
@@ -43,7 +43,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_lib_unit_tests.step);
 
     const flate_module = b.addModule("flate", .{
-        .root_source_file = .{ .path = "src/root.zig" },
+        .root_source_file = .{ .path = "src/flate.zig" },
     });
 
     const binaries = [_]Binary{

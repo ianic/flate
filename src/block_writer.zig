@@ -586,26 +586,26 @@ const fmt = std.fmt;
 const testing = std.testing;
 const ArrayList = std.ArrayList;
 
-const TestCase = @import("testdata/huffman_bit_writer.zig").TestCase;
-const writeBlockTestCases = @import("testdata/huffman_bit_writer.zig").writeBlockTestCases;
+const TestCase = @import("testdata/block_writer.zig").TestCase;
+const testCases = @import("testdata/block_writer.zig").testCases;
 
 // tests if the writeBlock encoding has changed.
 test "writeBlock" {
-    inline for (0..writeBlockTestCases.len) |i| {
-        try testBlock(writeBlockTestCases[i], .write_block);
+    inline for (0..testCases.len) |i| {
+        try testBlock(testCases[i], .write_block);
     }
 }
 
 // tests if the writeBlockDynamic encoding has changed.
 test "writeBlockDynamic" {
-    inline for (0..writeBlockTestCases.len) |i| {
-        try testBlock(writeBlockTestCases[i], .write_dyn_block);
+    inline for (0..testCases.len) |i| {
+        try testBlock(testCases[i], .write_dyn_block);
     }
 }
 
 test "writeBlockHuff" {
-    inline for (0..writeBlockTestCases.len) |i| {
-        try testBlock(writeBlockTestCases[i], .write_huffman_block);
+    inline for (0..testCases.len) |i| {
+        try testBlock(testCases[i], .write_huffman_block);
     }
     try testBlock(.{
         .tokens = &[_]Token{},
@@ -661,8 +661,8 @@ const TestFn = enum {
 fn testBlock(comptime tc: TestCase, comptime tfn: TestFn) !void {
     if (tc.input.len != 0 and tc.want.len != 0) {
         const want_name = comptime fmt.comptimePrint(tc.want, .{tfn.to_s()});
-        const input = @embedFile("testdata/" ++ tc.input);
-        const want = @embedFile("testdata/" ++ want_name);
+        const input = @embedFile("testdata/block_writer/" ++ tc.input);
+        const want = @embedFile("testdata/block_writer/" ++ want_name);
         try testWriteBlock(tfn, input, want, tc.tokens);
     }
 
@@ -671,7 +671,7 @@ fn testBlock(comptime tc: TestCase, comptime tfn: TestFn) !void {
     }
 
     const want_name_no_input = comptime fmt.comptimePrint(tc.want_no_input, .{tfn.to_s()});
-    const want = @embedFile("testdata/" ++ want_name_no_input);
+    const want = @embedFile("testdata/block_writer/" ++ want_name_no_input);
     try testWriteBlock(tfn, null, want, tc.tokens);
 }
 

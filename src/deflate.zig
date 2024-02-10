@@ -609,23 +609,23 @@ test "deflate file tokenization" {
         },
 
         .{
-            .data = @embedFile("testdata/huffman-null-max.input"),
+            .data = @embedFile("testdata/block_writer/huffman-null-max.input"),
             .tokens_count = .{ 257, 257, 257, 257, 257, 257 },
         },
         .{
-            .data = @embedFile("testdata/huffman-pi.input"),
+            .data = @embedFile("testdata/block_writer/huffman-pi.input"),
             .tokens_count = .{ 2570, 2564, 2564, 2564, 2564, 2564 },
         },
         .{
-            .data = @embedFile("testdata/huffman-text.input"),
+            .data = @embedFile("testdata/block_writer/huffman-text.input"),
             .tokens_count = .{ 235, 234, 234, 234, 234, 234 },
         },
         .{
-            .data = @embedFile("testdata/fuzzing/roundtrip1"),
+            .data = @embedFile("testdata/fuzz/roundtrip1"),
             .tokens_count = .{ 333, 331, 331, 331, 331, 331 },
         },
         .{
-            .data = @embedFile("testdata/fuzzing/roundtrip2"),
+            .data = @embedFile("testdata/fuzz/roundtrip2"),
             .tokens_count = .{ 334, 334, 334, 334, 334, 334 },
         },
     };

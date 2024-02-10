@@ -480,7 +480,7 @@ test "fuzzing tests" {
         out: []const u8 = "",
         err: ?anyerror = null,
     }{
-        .{ .input = "deflate-stream", .out = @embedFile("testdata/fuzzing/deflate-stream-out") },
+        .{ .input = "deflate-stream", .out = @embedFile("testdata/fuzz/deflate-stream-out") },
         .{ .input = "empty-distance-alphabet01" },
         .{ .input = "empty-distance-alphabet02" },
         .{ .input = "end-of-stream", .err = error.EndOfStream },
@@ -513,7 +513,7 @@ test "fuzzing tests" {
     };
 
     inline for (cases, 0..) |c, case_no| {
-        var in = std.io.fixedBufferStream(@embedFile("testdata/fuzzing/" ++ c.input));
+        var in = std.io.fixedBufferStream(@embedFile("testdata/fuzz/" ++ c.input));
         var out = std.ArrayList(u8).init(testing.allocator);
         defer out.deinit();
         errdefer std.debug.print("test case failed {}\n", .{case_no});
