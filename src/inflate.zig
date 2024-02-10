@@ -189,10 +189,11 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
                     return 1;
                 },
                 16 => {
-                    if (pos == 0) return error.BadDecoderState;
                     // Copy the previous code length 3 - 6 times.
                     // The next 2 bits indicate repeat length
                     const n: u8 = @as(u8, try self.bits.read(u2)) + 3;
+                    if (pos == 0 or pos + n > lens.len)
+                        return error.BadDecoderState;
                     for (0..n) |i| {
                         lens[pos + i] = lens[pos + i - 1];
                     }
