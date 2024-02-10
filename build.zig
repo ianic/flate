@@ -50,6 +50,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "gzip", .src = "bin/gzip.zig" },
         .{ .name = "gunzip", .src = "bin/gunzip.zig" },
         .{ .name = "decompress", .src = "bin/decompress.zig" },
+        .{ .name = "roundtrip", .src = "bin/roundtrip.zig" },
     };
     for (binaries) |i| {
         const bin = b.addExecutable(.{

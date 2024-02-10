@@ -620,6 +620,14 @@ test "deflate file tokenization" {
             .data = @embedFile("testdata/huffman-text.input"),
             .tokens_count = .{ 235, 234, 234, 234, 234, 234 },
         },
+        .{
+            .data = @embedFile("testdata/fuzzing/roundtrip1"),
+            .tokens_count = .{ 333, 331, 331, 331, 331, 331 },
+        },
+        .{
+            .data = @embedFile("testdata/fuzzing/roundtrip2"),
+            .tokens_count = .{ 334, 334, 334, 334, 334, 334 },
+        },
     };
 
     for (cases) |case| { // for each case

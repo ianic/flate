@@ -88,6 +88,7 @@ test {
 
 const std = @import("std");
 const testing = std.testing;
+const print = std.debug.print;
 
 test "decompress" {
     const deflate_block = [_]u8{
@@ -176,9 +177,10 @@ test "compress/decompress" {
     const levels = [_]deflate.Level{ .level_4, .level_5, .level_6, .level_7, .level_8, .level_9 };
     const cases = [_]struct {
         data: []const u8, // uncompressed content
-        gzip_sizes: [levels.len]usize, // compressed data sizes per level 4-9
-        huffman_only_size: usize,
-        store_size: usize,
+        // compressed data sizes per level 4-9
+        gzip_sizes: [levels.len]usize = [_]usize{0} ** levels.len,
+        huffman_only_size: usize = 0,
+        store_size: usize = 0,
     }{
         .{
             .data = @embedFile("testdata/rfc1951.txt"),
@@ -186,35 +188,47 @@ test "compress/decompress" {
             .huffman_only_size = 20287,
             .store_size = 36967,
         },
+        .{
+            .data = @embedFile("testdata/fuzzing/roundtrip1"),
+            .gzip_sizes = [_]usize{ 373, 370, 370, 370, 370, 370 },
+            .huffman_only_size = 393,
+            .store_size = 393,
+        },
+        .{
+            .data = @embedFile("testdata/fuzzing/roundtrip2"),
+            .gzip_sizes = [_]usize{ 373, 373, 373, 373, 373, 373 },
+            .huffman_only_size = 394,
+            .store_size = 394,
+        },
+        .{
+            .data = @embedFile("testdata/fuzzing/deflate-stream-out"),
+            .gzip_sizes = [_]usize{ 351, 347, 347, 347, 347, 347 },
+            .huffman_only_size = 498,
+            .store_size = 747,
+        },
     };
 
-    // helper for printing sizes
-    // for (cases, 0..) |case, i| {
-    //     const data = case.data;
-    //     std.debug.print("\ncase[{d}]: ", .{i});
-    //     for (4..10) |ilevel| {
-    //         var original = fixedBufferStream(data);
-    //         var compressed = fixedBufferStream(&cmp_buf);
-    //         try compress(.gzip, original.reader(), compressed.writer(), .{ .level = @enumFromInt(ilevel) });
-    //         std.debug.print("{d}, ", .{compressed.pos});
-    //     }
-    // }
-    // std.debug.print("\n", .{});
-
-    for (cases) |case| { // for each case
+    for (cases, 0..) |case, case_no| { // for each case
         const data = case.data;
 
         for (levels, 0..) |level, i| { // for each compression level
-            const gzip_size = case.gzip_sizes[i];
 
             inline for (Container.list) |container| { // for each wrapping
-                const compressed_size = gzip_size - Container.gzip.size() + container.size();
+                var compressed_size: usize = if (case.gzip_sizes[i] > 0)
+                    case.gzip_sizes[i] - Container.gzip.size() + container.size()
+                else
+                    0;
 
                 // compress original stream to compressed stream
                 {
                     var original = fixedBufferStream(data);
                     var compressed = fixedBufferStream(&cmp_buf);
                     try deflate.compress(container, original.reader(), compressed.writer(), level);
+                    if (compressed_size == 0) {
+                        if (container == .gzip)
+                            print("case {d} gzip level {} compressed size: {d}\n", .{ case_no, level, compressed.pos });
+                        compressed_size = compressed.pos;
+                    }
                     try testing.expectEqual(compressed_size, compressed.pos);
                 }
                 // decompress compressed stream to decompressed stream
@@ -249,7 +263,10 @@ test "compress/decompress" {
         // huffman only compression
         {
             inline for (Container.list) |container| { // for each wrapping
-                const compressed_size = case.huffman_only_size - Container.gzip.size() + container.size();
+                var compressed_size: usize = if (case.huffman_only_size > 0)
+                    case.huffman_only_size - Container.gzip.size() + container.size()
+                else
+                    0;
 
                 // compress original stream to compressed stream
                 {
@@ -258,6 +275,11 @@ test "compress/decompress" {
                     var cmp = try deflate.huffmanCompressor(container, compressed.writer());
                     try cmp.compress(original.reader());
                     try cmp.close();
+                    if (compressed_size == 0) {
+                        if (container == .gzip)
+                            print("case {d} huffman only compressed size: {d}\n", .{ case_no, compressed.pos });
+                        compressed_size = compressed.pos;
+                    }
                     try testing.expectEqual(compressed_size, compressed.pos);
                 }
                 // decompress compressed stream to decompressed stream
@@ -273,7 +295,10 @@ test "compress/decompress" {
         // store only
         {
             inline for (Container.list) |container| { // for each wrapping
-                const compressed_size = case.store_size - Container.gzip.size() + container.size();
+                var compressed_size: usize = if (case.store_size > 0)
+                    case.store_size - Container.gzip.size() + container.size()
+                else
+                    0;
 
                 // compress original stream to compressed stream
                 {
@@ -282,6 +307,12 @@ test "compress/decompress" {
                     var cmp = try deflate.storeCompressor(container, compressed.writer());
                     try cmp.compress(original.reader());
                     try cmp.close();
+                    if (compressed_size == 0) {
+                        if (container == .gzip)
+                            print("case {d} store only compressed size: {d}\n", .{ case_no, compressed.pos });
+                        compressed_size = compressed.pos;
+                    }
+
                     try testing.expectEqual(compressed_size, compressed.pos);
                 }
                 // decompress compressed stream to decompressed stream

@@ -118,7 +118,7 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
         fn fixedDistanceCode(self: *Self, code: u8) !void {
             try self.bits.fill(5 + 5 + 13);
             const length = try self.decodeLength(code);
-            const distance = try self.decodeDistance(try self.bits.readF(u5, F.buffered));
+            const distance = try self.decodeDistance(try self.bits.readF(u5, F.buffered | F.reverse));
             try self.hist.writeMatch(length, distance);
         }
 
@@ -481,13 +481,13 @@ test "fuzzing tests" {
         err: ?anyerror = null,
     }{
         .{ .input = "deflate-stream", .out = @embedFile("testdata/fuzzing/deflate-stream-out") },
-        .{ .input = "empty-distance-alphabet01", .err = error.EndOfStream },
-        .{ .input = "empty-distance-alphabet02", .out = "" },
+        .{ .input = "empty-distance-alphabet01" },
+        .{ .input = "empty-distance-alphabet02" },
         .{ .input = "end-of-stream", .err = error.EndOfStream },
-        .{ .input = "invalid-distance", .err = error.EndOfStream },
+        .{ .input = "invalid-distance", .err = error.InvalidMatch },
         .{ .input = "invalid-tree01", .err = error.EndOfStream },
-        .{ .input = "invalid-tree02", .err = error.EndOfStream },
-        .{ .input = "invalid-tree03", .err = error.EndOfStream },
+        .{ .input = "invalid-tree02" },
+        .{ .input = "invalid-tree03" },
         .{ .input = "lengths-overflow", .err = error.BadDecoderState },
         .{ .input = "out-of-codes", .err = error.InvalidCode },
         .{ .input = "puff01", .err = error.WrongStoredBlockNlen },
@@ -499,7 +499,7 @@ test "fuzzing tests" {
         .{ .input = "puff08", .err = error.InvalidCode },
         .{ .input = "puff09", .out = "P" },
         .{ .input = "puff10", .err = error.InvalidCode },
-        .{ .input = "puff11", .err = error.EndOfStream },
+        .{ .input = "puff11", .err = error.InvalidMatch },
         .{ .input = "puff12", .err = error.EndOfStream },
         .{ .input = "puff13", .err = error.InvalidCode },
         .{ .input = "puff14", .err = error.EndOfStream },
@@ -512,10 +512,11 @@ test "fuzzing tests" {
         .{ .input = "fuzz4", .err = error.InvalidCode },
     };
 
-    inline for (cases) |c| {
+    inline for (cases, 0..) |c, case_no| {
         var in = std.io.fixedBufferStream(@embedFile("testdata/fuzzing/" ++ c.input));
         var out = std.ArrayList(u8).init(testing.allocator);
         defer out.deinit();
+        errdefer std.debug.print("test case failed {}\n", .{case_no});
 
         if (c.err) |expected_err| {
             try testing.expectError(expected_err, decompress(.raw, in.reader(), out.writer()));

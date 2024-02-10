@@ -63,9 +63,8 @@ pub fn BitReader(comptime ReaderType: type) type {
                 return;
             }
 
-            if (self.bits == 0) {
+            if (self.nbits == 0)
                 return error.EndOfStream;
-            }
         }
 
         // Read exactly buf.len bytes into buf.
