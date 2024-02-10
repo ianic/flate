@@ -476,72 +476,52 @@ test "zlib decompress" {
 
 test "fuzzing tests" {
     const cases = [_]struct {
-        in: []const u8,
+        input: []const u8,
         out: []const u8 = "",
         err: ?anyerror = null,
     }{
-        .{ .in = @embedFile("testdata/fuzzing/deflate-stream"), .out =
-        \\[
-        \\    { id: "brieflz",
-        \\      name: "BriefLZ",
-        \\      libraryUrl: "https://github.com/jibsen/brieflz",
-        \\      license: "MIT",
-        \\      revision: "bcaa6a1ee7ccf005512b5c23aa92b40cf75f9ed1",
-        \\      codecs: [ { name: "brieflz" } ], },
-        \\    { id: "brotli",
-        \\      name: "Brotli",
-        \\      libraryUrl: "https://github.com/google/brotli",
-        \\      license: "Apache 2.0",
-        \\      revision: "1dd66ef114fd244778d9dcb5da09c28b49a0df33",
-        \\      codecs: [ { name: "brotli",
-        \\		  levels: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
-        \\		  streaming: true } ], },
-        \\    { id: "bsc",
-        \\      name: "bsc",
-        \\      libraryUrl: "http://libbsc.com/",
-        \\      license: "Apache 2.0",
-        \\      revision: "b2b07421381b19b2fada8b291f3cdead10578abc",
-        \\      codecs: [ { name: "bsc" } ] }
-        \\]
-        \\
-        },
-        .{ .in = @embedFile("testdata/fuzzing/empty-distance-alphabet01"), .err = error.EndOfStream },
-        .{ .in = @embedFile("testdata/fuzzing/empty-distance-alphabet02"), .out = "" },
-        .{ .in = @embedFile("testdata/fuzzing/end-of-stream"), .err = error.EndOfStream },
-        .{ .in = @embedFile("testdata/fuzzing/invalid-distance"), .err = error.EndOfStream },
-        .{ .in = @embedFile("testdata/fuzzing/invalid-tree01"), .err = error.EndOfStream },
-        .{ .in = @embedFile("testdata/fuzzing/invalid-tree02"), .err = error.EndOfStream },
-        .{ .in = @embedFile("testdata/fuzzing/invalid-tree03"), .err = error.EndOfStream },
-        .{ .in = @embedFile("testdata/fuzzing/lengths-overflow"), .err = error.BadDecoderState },
-        .{ .in = @embedFile("testdata/fuzzing/out-of-codes"), .err = error.InvalidCode },
-        .{ .in = @embedFile("testdata/fuzzing/puff01"), .err = error.WrongStoredBlockNlen },
-        .{ .in = @embedFile("testdata/fuzzing/puff02"), .err = error.EndOfStream },
-        .{ .in = @embedFile("testdata/fuzzing/puff03"), .out = &[_]u8{0xa} },
-        .{ .in = @embedFile("testdata/fuzzing/puff04"), .err = error.InvalidCode },
-        .{ .in = @embedFile("testdata/fuzzing/puff05"), .err = error.EndOfStream },
-        .{ .in = @embedFile("testdata/fuzzing/puff06"), .err = error.EndOfStream },
-        .{ .in = @embedFile("testdata/fuzzing/puff08"), .err = error.InvalidCode },
-        .{ .in = @embedFile("testdata/fuzzing/puff09"), .out = "P" },
-        .{ .in = @embedFile("testdata/fuzzing/puff10"), .err = error.InvalidCode },
-        .{ .in = @embedFile("testdata/fuzzing/puff11"), .err = error.EndOfStream },
-        .{ .in = @embedFile("testdata/fuzzing/puff12"), .err = error.EndOfStream },
-        .{ .in = @embedFile("testdata/fuzzing/puff13"), .err = error.InvalidCode },
-        .{ .in = @embedFile("testdata/fuzzing/puff14"), .err = error.BadDecoderState },
-        .{ .in = @embedFile("testdata/fuzzing/puff15"), .err = error.EndOfStream },
-        .{ .in = @embedFile("testdata/fuzzing/puff16"), .err = error.EndOfStream },
-        .{ .in = @embedFile("testdata/fuzzing/puff17"), .err = error.EndOfStream },
+        .{ .input = "deflate-stream", .out = @embedFile("testdata/fuzzing/deflate-stream-out") },
+        .{ .input = "empty-distance-alphabet01", .err = error.EndOfStream },
+        .{ .input = "empty-distance-alphabet02", .out = "" },
+        .{ .input = "end-of-stream", .err = error.EndOfStream },
+        .{ .input = "invalid-distance", .err = error.EndOfStream },
+        .{ .input = "invalid-tree01", .err = error.EndOfStream },
+        .{ .input = "invalid-tree02", .err = error.EndOfStream },
+        .{ .input = "invalid-tree03", .err = error.EndOfStream },
+        .{ .input = "lengths-overflow", .err = error.BadDecoderState },
+        .{ .input = "out-of-codes", .err = error.InvalidCode },
+        .{ .input = "puff01", .err = error.WrongStoredBlockNlen },
+        .{ .input = "puff02", .err = error.EndOfStream },
+        .{ .input = "puff03", .out = &[_]u8{0xa} },
+        .{ .input = "puff04", .err = error.InvalidCode },
+        .{ .input = "puff05", .err = error.EndOfStream },
+        .{ .input = "puff06", .err = error.EndOfStream },
+        .{ .input = "puff08", .err = error.InvalidCode },
+        .{ .input = "puff09", .out = "P" },
+        .{ .input = "puff10", .err = error.InvalidCode },
+        .{ .input = "puff11", .err = error.EndOfStream },
+        .{ .input = "puff12", .err = error.EndOfStream },
+        .{ .input = "puff13", .err = error.InvalidCode },
+        .{ .input = "puff14", .err = error.EndOfStream },
+        .{ .input = "puff15", .err = error.EndOfStream },
+        .{ .input = "puff16", .err = error.EndOfStream },
+        .{ .input = "puff17", .err = error.EndOfStream },
+        .{ .input = "fuzz1", .err = error.BadDecoderState },
+        .{ .input = "fuzz2", .err = error.BadDecoderState },
+        .{ .input = "fuzz3", .err = error.InvalidMatch },
+        .{ .input = "fuzz4", .err = error.InvalidCode },
     };
 
-    for (cases) |c| {
-        var fb = std.io.fixedBufferStream(c.in);
-        var al = std.ArrayList(u8).init(testing.allocator);
-        defer al.deinit();
+    inline for (cases) |c| {
+        var in = std.io.fixedBufferStream(@embedFile("testdata/fuzzing/" ++ c.input));
+        var out = std.ArrayList(u8).init(testing.allocator);
+        defer out.deinit();
 
         if (c.err) |expected_err| {
-            try testing.expectError(expected_err, decompress(.raw, fb.reader(), al.writer()));
+            try testing.expectError(expected_err, decompress(.raw, in.reader(), out.writer()));
         } else {
-            try decompress(.raw, fb.reader(), al.writer());
-            try testing.expectEqualStrings(c.out, al.items);
+            try decompress(.raw, in.reader(), out.writer());
+            try testing.expectEqualStrings(c.out, out.items);
         }
     }
 }

@@ -212,7 +212,7 @@ const print = std.debug.print;
 const assert = std.debug.assert;
 const expect = std.testing.expect;
 
-test "full " {
+test "encode/decode literals" {
     const LiteralEncoder = @import("huffman_encoder.zig").LiteralEncoder;
     var enc: LiteralEncoder = .{};
     // worst case, all freqencies are used
