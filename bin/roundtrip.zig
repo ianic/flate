@@ -11,24 +11,66 @@ pub fn main() !void {
     const data = try stdin.readToEndAlloc(allocator, std.math.maxInt(usize));
     defer allocator.free(data);
 
-    var fbs = std.io.fixedBufferStream(data);
-    const reader = fbs.reader();
+    const levels = [_]flate.raw.Level{ .level_4, .level_5, .level_6, .level_7, .level_8, .level_9 };
 
-    // Compress the data
-    var buf = std.ArrayList(u8).init(allocator);
-    defer buf.deinit();
-    // TODO: vary the level
-    try flate.raw.compress(reader, buf.writer(), .default);
+    // For each compression level
+    for (levels) |level| {
+        var fbs = std.io.fixedBufferStream(data);
 
-    // Now try to decompress it
-    var buf_fbs = std.io.fixedBufferStream(buf.items);
-    var inflate = flate.raw.decompressor(buf_fbs.reader());
-    const inflated = inflate.reader().readAllAlloc(allocator, std.math.maxInt(usize)) catch |err| {
-        std.debug.print("{}\n", .{err});
-        return;
-    };
-    defer allocator.free(inflated);
+        // Compress the data
+        var buf = std.ArrayList(u8).init(allocator);
+        defer buf.deinit();
+        try flate.raw.compress(fbs.reader(), buf.writer(), level);
 
-    std.debug.print("OK {d}\n", .{data.len});
-    try std.testing.expectEqualSlices(u8, data, inflated);
+        // Now try to decompress it
+        var buf_fbs = std.io.fixedBufferStream(buf.items);
+        var inflate = flate.raw.decompressor(buf_fbs.reader());
+        const inflated = try inflate.reader().readAllAlloc(allocator, std.math.maxInt(usize));
+        defer allocator.free(inflated);
+
+        try std.testing.expectEqualSlices(u8, data, inflated);
+        std.debug.print("{}, original: {d}, compressed: {d}\n", .{ level, data.len, buf.items.len });
+    }
+
+    // Huffman only compression
+    {
+        var fbs = std.io.fixedBufferStream(data);
+        var buf = std.ArrayList(u8).init(allocator);
+        defer buf.deinit();
+
+        // Compress the data
+        var cmp = try flate.raw.huffmanCompressor(buf.writer());
+        try cmp.compress(fbs.reader());
+        try cmp.close();
+
+        // Now try to decompress it
+        var buf_fbs = std.io.fixedBufferStream(buf.items);
+        var inflate = flate.raw.decompressor(buf_fbs.reader());
+        const inflated = try inflate.reader().readAllAlloc(allocator, std.math.maxInt(usize));
+        defer allocator.free(inflated);
+
+        try std.testing.expectEqualSlices(u8, data, inflated);
+        std.debug.print("huffman only original: {d}, compressed {d}\n", .{ data.len, buf.items.len });
+    }
+
+    // Store only, no compression
+    {
+        var fbs = std.io.fixedBufferStream(data);
+        var buf = std.ArrayList(u8).init(allocator);
+        defer buf.deinit();
+
+        // Compress the data
+        var cmp = try flate.raw.storeCompressor(buf.writer());
+        try cmp.compress(fbs.reader());
+        try cmp.close();
+
+        // Now try to decompress it
+        var buf_fbs = std.io.fixedBufferStream(buf.items);
+        var inflate = flate.raw.decompressor(buf_fbs.reader());
+        const inflated = try inflate.reader().readAllAlloc(allocator, std.math.maxInt(usize));
+        defer allocator.free(inflated);
+
+        try std.testing.expectEqualSlices(u8, data, inflated);
+        std.debug.print("store original: {d}, stored {d}\n", .{ data.len, buf.items.len });
+    }
 }
