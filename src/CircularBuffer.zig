@@ -130,105 +130,105 @@ pub fn full(self: *Self) bool {
 }
 
 // example from: https://youtu.be/SJPvNi4HrWQ?t=3558
-test "CircularBuffer copy" {
-    var sw: Self = .{};
+test "flate.CircularBuffer writeMatch" {
+    var cb: Self = .{};
 
-    sw.writeAll("a salad; ");
-    try sw.writeMatch(5, 9);
-    try sw.writeMatch(3, 3);
+    cb.writeAll("a salad; ");
+    try cb.writeMatch(5, 9);
+    try cb.writeMatch(3, 3);
 
-    try testing.expectEqualStrings("a salad; a salsal", sw.read());
+    try testing.expectEqualStrings("a salad; a salsal", cb.read());
 }
 
-test "CircularBuffer copy overlap" {
-    var sw: Self = .{};
+test "flate.CircularBuffer writeMatch overlap" {
+    var cb: Self = .{};
 
-    sw.writeAll("a b c ");
-    try sw.writeMatch(8, 4);
-    sw.write('d');
+    cb.writeAll("a b c ");
+    try cb.writeMatch(8, 4);
+    cb.write('d');
 
-    try testing.expectEqualStrings("a b c b c b c d", sw.read());
+    try testing.expectEqualStrings("a b c b c b c d", cb.read());
 }
 
-test "CircularBuffer readAtMost" {
-    var sw: Self = .{};
+test "flate.CircularBuffer readAtMost" {
+    var cb: Self = .{};
 
-    sw.writeAll("0123456789");
-    try sw.writeMatch(50, 10);
+    cb.writeAll("0123456789");
+    try cb.writeMatch(50, 10);
 
-    try testing.expectEqualStrings("0123456789" ** 6, sw.buffer[sw.rp..sw.wp]);
+    try testing.expectEqualStrings("0123456789" ** 6, cb.buffer[cb.rp..cb.wp]);
     for (0..6) |i| {
-        try testing.expectEqual(i * 10, sw.rp);
-        try testing.expectEqualStrings("0123456789", sw.readAtMost(10));
+        try testing.expectEqual(i * 10, cb.rp);
+        try testing.expectEqualStrings("0123456789", cb.readAtMost(10));
     }
-    try testing.expectEqualStrings("", sw.readAtMost(10));
-    try testing.expectEqualStrings("", sw.read());
+    try testing.expectEqualStrings("", cb.readAtMost(10));
+    try testing.expectEqualStrings("", cb.read());
 }
 
-test "CircularBuffer circular buffer" {
-    var sw: Self = .{};
+test "flate.CircularBuffer" {
+    var cb: Self = .{};
 
     const data = "0123456789abcdef" ** (1024 / 16);
-    sw.writeAll(data);
-    try testing.expectEqual(@as(usize, 0), sw.rp);
-    try testing.expectEqual(@as(usize, 1024), sw.wp);
-    try testing.expectEqual(@as(usize, 1024 * 63), sw.free());
+    cb.writeAll(data);
+    try testing.expectEqual(@as(usize, 0), cb.rp);
+    try testing.expectEqual(@as(usize, 1024), cb.wp);
+    try testing.expectEqual(@as(usize, 1024 * 63), cb.free());
 
     for (0..62 * 4) |_|
-        try sw.writeMatch(256, 1024); // write 62K
+        try cb.writeMatch(256, 1024); // write 62K
 
-    try testing.expectEqual(@as(usize, 0), sw.rp);
-    try testing.expectEqual(@as(usize, 63 * 1024), sw.wp);
-    try testing.expectEqual(@as(usize, 1024), sw.free());
+    try testing.expectEqual(@as(usize, 0), cb.rp);
+    try testing.expectEqual(@as(usize, 63 * 1024), cb.wp);
+    try testing.expectEqual(@as(usize, 1024), cb.free());
 
-    sw.writeAll(data[0..200]);
-    _ = sw.readAtMost(1024); // make some space
-    sw.writeAll(data); // overflows write position
-    try testing.expectEqual(@as(usize, 200 + 65536), sw.wp);
-    try testing.expectEqual(@as(usize, 1024), sw.rp);
-    try testing.expectEqual(@as(usize, 1024 - 200), sw.free());
+    cb.writeAll(data[0..200]);
+    _ = cb.readAtMost(1024); // make some space
+    cb.writeAll(data); // overflows write position
+    try testing.expectEqual(@as(usize, 200 + 65536), cb.wp);
+    try testing.expectEqual(@as(usize, 1024), cb.rp);
+    try testing.expectEqual(@as(usize, 1024 - 200), cb.free());
 
-    const rb = sw.readBlock(Self.buffer_len);
+    const rb = cb.readBlock(Self.buffer_len);
     try testing.expectEqual(@as(usize, 65536 - 1024), rb.len);
     try testing.expectEqual(@as(usize, 1024), rb.head);
     try testing.expectEqual(@as(usize, 65536), rb.tail);
 
-    try testing.expectEqual(@as(usize, 65536 - 1024), sw.read().len); // read to the end of the buffer
-    try testing.expectEqual(@as(usize, 200 + 65536), sw.wp);
-    try testing.expectEqual(@as(usize, 65536), sw.rp);
-    try testing.expectEqual(@as(usize, 65536 - 200), sw.free());
+    try testing.expectEqual(@as(usize, 65536 - 1024), cb.read().len); // read to the end of the buffer
+    try testing.expectEqual(@as(usize, 200 + 65536), cb.wp);
+    try testing.expectEqual(@as(usize, 65536), cb.rp);
+    try testing.expectEqual(@as(usize, 65536 - 200), cb.free());
 
-    try testing.expectEqual(@as(usize, 200), sw.read().len); // read the rest
+    try testing.expectEqual(@as(usize, 200), cb.read().len); // read the rest
 }
 
-test "CircularBuffer write over border" {
-    var sw: Self = .{};
-    sw.wp = sw.buffer.len - 15;
-    sw.rp = sw.wp;
+test "flate.CircularBuffer write overlap" {
+    var cb: Self = .{};
+    cb.wp = cb.buffer.len - 15;
+    cb.rp = cb.wp;
 
-    sw.writeAll("0123456789");
-    sw.writeAll("abcdefghij");
+    cb.writeAll("0123456789");
+    cb.writeAll("abcdefghij");
 
-    try testing.expectEqual(sw.buffer.len + 5, sw.wp);
-    try testing.expectEqual(sw.buffer.len - 15, sw.rp);
+    try testing.expectEqual(cb.buffer.len + 5, cb.wp);
+    try testing.expectEqual(cb.buffer.len - 15, cb.rp);
 
-    try testing.expectEqualStrings("0123456789abcde", sw.read());
-    try testing.expectEqualStrings("fghij", sw.read());
+    try testing.expectEqualStrings("0123456789abcde", cb.read());
+    try testing.expectEqualStrings("fghij", cb.read());
 
-    try testing.expect(sw.wp == sw.rp);
+    try testing.expect(cb.wp == cb.rp);
 }
 
-test "CircularBuffer copy over border" {
-    var sw: Self = .{};
-    sw.wp = sw.buffer.len - 15;
-    sw.rp = sw.wp;
+test "flate.CircularBuffer writeMatch/read overlap" {
+    var cb: Self = .{};
+    cb.wp = cb.buffer.len - 15;
+    cb.rp = cb.wp;
 
-    sw.writeAll("0123456789");
-    try sw.writeMatch(15, 5);
+    cb.writeAll("0123456789");
+    try cb.writeMatch(15, 5);
 
-    try testing.expectEqualStrings("012345678956789", sw.read());
-    try testing.expectEqualStrings("5678956789", sw.read());
+    try testing.expectEqualStrings("012345678956789", cb.read());
+    try testing.expectEqualStrings("5678956789", cb.read());
 
-    try sw.writeMatch(20, 25);
-    try testing.expectEqualStrings("01234567895678956789", sw.read());
+    try cb.writeMatch(20, 25);
+    try testing.expectEqualStrings("01234567895678956789", cb.read());
 }

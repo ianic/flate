@@ -275,12 +275,12 @@ const match_distances = [_]MatchDistance{
     .{ .extra_bits = 13, .base_scaled = 0x6000, .code = 29, .base = 24577 },
 };
 
-test "Token size" {
+test "flate.Token size" {
     try expect(@sizeOf(Token) == 4);
 }
 
 // testing table https://datatracker.ietf.org/doc/html/rfc1951#page-12
-test "MatchLength" {
+test "flate.Token MatchLength" {
     var c = Token.initMatch(1, 4).lengthEncoding();
     try expect(c.code == 258);
     try expect(c.extra_bits == 0);
@@ -302,7 +302,7 @@ test "MatchLength" {
     try expect(c.extra_length == 130 - 115);
 }
 
-test "MatchDistance" {
+test "flate.Token MatchDistance" {
     var c = Token.initMatch(1, 4).distanceEncoding();
     try expect(c.code == 0);
     try expect(c.extra_bits == 0);
@@ -314,7 +314,7 @@ test "MatchDistance" {
     try expect(c.extra_distance == 192 - 129);
 }
 
-test "match_lengths" {
+test "flate.Token match_lengths" {
     for (match_lengths, 0..) |ml, i| {
         try expect(@as(u16, ml.base_scaled) + 3 == ml.base);
         try expect(i + 257 == ml.code);

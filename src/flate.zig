@@ -81,7 +81,7 @@ pub const raw = byContainer(.raw);
 pub const gzip = byContainer(.gzip);
 pub const zlib = byContainer(.zlib);
 
-test {
+test "flate" {
     _ = @import("deflate.zig");
     _ = @import("inflate.zig");
 }
@@ -90,7 +90,7 @@ const std = @import("std");
 const testing = std.testing;
 const print = std.debug.print;
 
-test "decompress" {
+test "flate decompress" {
     const deflate_block = [_]u8{
         0b0000_0001, 0b0000_1100, 0x00, 0b1111_0011, 0xff, // deflate fixed buffer header len, nlen
         'H', 'e', 'l', 'l', 'o', ' ', 'w', 'o', 'r', 'l', 'd', 0x0a, // non compressed data
@@ -168,7 +168,7 @@ test "decompress" {
     }
 }
 
-test "compress/decompress" {
+test "flate compress/decompress" {
     const fixedBufferStream = std.io.fixedBufferStream;
 
     var cmp_buf: [64 * 1024]u8 = undefined; // compressed data buffer

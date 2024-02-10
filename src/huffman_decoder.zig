@@ -132,7 +132,7 @@ fn HuffmanDecoder(
     };
 }
 
-test "Huffman init/find" {
+test "flate.HuffmanDecoder init/find" {
     // example data from: https://youtu.be/SJPvNi4HrWQ?t=8423
     const code_lens = [_]u4{ 4, 3, 0, 2, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 3, 2 };
     var h: CodegenDecoder = .{};
@@ -212,7 +212,7 @@ const print = std.debug.print;
 const assert = std.debug.assert;
 const expect = std.testing.expect;
 
-test "encode/decode literals" {
+test "flate.HuffmanDecoder encode/decode literals" {
     const LiteralEncoder = @import("huffman_encoder.zig").LiteralEncoder;
     var enc: LiteralEncoder = .{};
     // worst case, all freqencies are used

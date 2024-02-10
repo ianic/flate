@@ -122,7 +122,7 @@ pub fn tokensBuffer(self: *Self) ?[]const u8 {
     return self.buffer[@intCast(self.fp)..self.rp];
 }
 
-test "SlidingWindow match" {
+test "flate.SlidingWindow match" {
     const data = "Blah blah blah blah blah!";
     var win: Self = .{};
     try expect(win.write(data) == data.len);
@@ -142,7 +142,7 @@ test "SlidingWindow match" {
     try expect(win.match(15, 20, 4) == 0);
 }
 
-test "SlidingWindow slide" {
+test "flate.SlidingWindow slide" {
     var win: Self = .{};
     win.wp = Self.buffer_len - 11;
     win.rp = Self.buffer_len - 111;

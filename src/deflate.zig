@@ -482,7 +482,7 @@ fn SimpleCompressor(
     };
 }
 
-test "deflate: tokenization" {
+test "flate.Deflate tokenization" {
     const L = Token.initLiteral;
     const M = Token.initMatch;
 
@@ -554,7 +554,7 @@ const TestTokenWriter = struct {
     pub fn flush(_: *Self) !void {}
 };
 
-test "check struct sizes" {
+test "flate.Deflate struct sizes" {
     try expect(@sizeOf(Token) == 4);
 
     // list: (1 << 15) * 4 = 128k + pos: 8
@@ -596,7 +596,7 @@ test "check struct sizes" {
     // 8 buffer write pointer
 }
 
-test "deflate file tokenization" {
+test "flate deflate file tokenization" {
     const levels = [_]Level{ .level_4, .level_5, .level_6, .level_7, .level_8, .level_9 };
     const cases = [_]struct {
         data: []const u8, // uncompressed content
@@ -703,7 +703,7 @@ fn TokenDecoder(comptime WriterType: type) type {
     };
 }
 
-test "store simple compressor" {
+test "flate.Deflate store simple compressor" {
     const data = "Hello world!";
     const expected = [_]u8{
         0x1, // block type 0, final bit set

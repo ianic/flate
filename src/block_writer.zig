@@ -590,20 +590,20 @@ const TestCase = @import("testdata/block_writer.zig").TestCase;
 const testCases = @import("testdata/block_writer.zig").testCases;
 
 // tests if the writeBlock encoding has changed.
-test "writeBlock" {
+test "flate.BlockWriter write" {
     inline for (0..testCases.len) |i| {
         try testBlock(testCases[i], .write_block);
     }
 }
 
 // tests if the writeBlockDynamic encoding has changed.
-test "writeBlockDynamic" {
+test "flate.BlockWriter dynamicBlock" {
     inline for (0..testCases.len) |i| {
         try testBlock(testCases[i], .write_dyn_block);
     }
 }
 
-test "writeBlockHuff" {
+test "flate.BlockWriter huffmanBlock" {
     inline for (0..testCases.len) |i| {
         try testBlock(testCases[i], .write_huffman_block);
     }
