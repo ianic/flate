@@ -140,15 +140,15 @@ fn Deflate(comptime container: Container, comptime WriterType: type, comptime Bl
             return self;
         }
 
-        const TokenizeOption = enum { none, flush, final };
+        const FlushOption = enum { none, flush, final };
 
         // Process data in window and create tokens. If token buffer is full
         // flush tokens to the token writer. In the case of `flush` or `final`
         // option it will process all data from the window. In the `none` case
         // it will preserve some data for the next match.
-        fn tokenize(self: *Self, opt: TokenizeOption) !void {
+        fn tokenize(self: *Self, flush_opt: FlushOption) !void {
             // flush - process all data from window
-            const should_flush = (opt != .none);
+            const should_flush = (flush_opt != .none);
 
             // While there is data in active lookahead buffer.
             while (self.win.activeLookahead(should_flush)) |lh| {
@@ -195,7 +195,7 @@ fn Deflate(comptime container: Container, comptime WriterType: type, comptime Bl
                 try self.addPrevLiteral();
                 self.prev_literal = null;
 
-                try self.flushTokens(opt == .final);
+                try self.flushTokens(flush_opt);
             }
         }
 
@@ -221,7 +221,7 @@ fn Deflate(comptime container: Container, comptime WriterType: type, comptime Bl
 
         fn addToken(self: *Self, token: Token) !void {
             self.tokens.add(token);
-            if (self.tokens.full()) try self.flushTokens(false);
+            if (self.tokens.full()) try self.flushTokens(.none);
         }
 
         // Finds largest match in the history window with the data at current pos.
@@ -260,10 +260,25 @@ fn Deflate(comptime container: Container, comptime WriterType: type, comptime Bl
             return match;
         }
 
-        fn flushTokens(self: *Self, final: bool) !void {
-            try self.block_writer.write(self.tokens.tokens(), final, self.win.tokensBuffer());
-            try self.block_writer.flush();
+        fn flushTokens(self: *Self, flush_opt: FlushOption) !void {
+            // Pass tokens to the token writer
+            try self.block_writer.write(self.tokens.tokens(), flush_opt == .final, self.win.tokensBuffer());
+            // Stored block ensures byte aligment.
+            // It has 3 bits (final, block_type) and then padding until byte boundary.
+            // After that everyting is aligned to the boundary in the stored block.
+            // Empty stored block is Ob000 + (0-7) bits of padding + 0x00 0x00 0xFF 0xFF.
+            // Last 4 bytes are byte aligned.
+            if (flush_opt == .flush) {
+                try self.block_writer.storedBlock("", false);
+            }
+            if (flush_opt != .none) {
+                // Safe to call only when byte aligned or it is OK to add
+                // padding bits (on last byte of the final block).
+                try self.block_writer.flush();
+            }
+            // Reset internal tokens store.
             self.tokens.reset();
+            // Notify win that tokens are flushed.
             self.win.flush();
         }
 
@@ -429,10 +444,13 @@ fn SimpleCompressor(
 
         pub fn flush(self: *Self) !void {
             try self.flushBuffer(false);
+            try self.block_writer.storedBlock("", false);
+            try self.block_writer.flush();
         }
 
         pub fn close(self: *Self) !void {
             try self.flushBuffer(true);
+            try self.block_writer.flush();
             try container.writeFooter(&self.hasher, self.wrt);
         }
 
@@ -442,7 +460,6 @@ fn SimpleCompressor(
                 .huffman => try self.block_writer.huffmanBlock(buf, final),
                 .store => try self.block_writer.storedBlock(buf, final),
             }
-            try self.block_writer.flush();
             self.wp = 0;
         }
 
@@ -539,6 +556,8 @@ const TestTokenWriter = struct {
             self.pos += 1;
         }
     }
+
+    pub fn storedBlock(_: *Self, _: []const u8, _: bool) !void {}
 
     pub fn get(self: *Self) []Token {
         return self.actual[0..self.pos];
@@ -690,6 +709,8 @@ fn TokenDecoder(comptime WriterType: type) type {
             }
             try self.flushWin();
         }
+
+        pub fn storedBlock(_: *Self, _: []const u8, _: bool) !void {}
 
         fn flushWin(self: *Self) !void {
             while (true) {

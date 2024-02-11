@@ -218,8 +218,7 @@ test "flate.HuffmanDecoder encode/decode literals" {
     // worst case, all freqencies are used
     var freq = [_]u16{0} ** 286;
     for (&freq, 1..) |*f, i| {
-        if (i % 2 == 0)
-            f.* = @intCast(i);
+        f.* = @intCast(i);
     }
     // encoder from freqencies
     enc.generate(&freq, 15);

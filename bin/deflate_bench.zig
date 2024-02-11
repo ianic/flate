@@ -65,6 +65,7 @@ pub fn run(output: anytype, opt: Options) !void {
             //     while (true) {
             //         const n = try input.readAll(&buf);
             //         _ = try cmp.write(buf[0..n]);
+            //         try cmp.flush();
             //         if (n < buf.len) break;
             //     }
             //     try cmp.close();

@@ -87,7 +87,8 @@ pub fn Inflate(comptime container: Container, comptime ReaderType: type) type {
         }
 
         fn storedBlock(self: *Self) !bool {
-            self.bits.alignToByte(); // skip 5 bits padding (block header is 3 bits)
+            self.bits.alignToByte(); // skip padding until byte boundary
+            // everyting after this is byte aligned in stored block
             var len = try self.bits.read(u16);
             const nlen = try self.bits.read(u16);
             if (len != ~nlen) return error.WrongStoredBlockNlen;

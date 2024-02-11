@@ -44,6 +44,12 @@ pub fn BlockWriter(comptime WriterType: type) type {
             };
         }
 
+        /// Flush intrenal bit buffer to the writer.
+        /// Should be called only when bit stream is at byte boundary.
+        ///
+        /// That is after final block; when last byte could be incomplete or
+        /// after stored block; which is aligned to the byte bounday (it has x
+        /// padding bits after first 3 bits).
         pub fn flush(self: *Self) Error!void {
             try self.bit_writer.flush();
         }
