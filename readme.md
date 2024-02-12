@@ -133,6 +133,7 @@ Great materials for understanding deflate:
 [RFC 1950 - zlib](https://datatracker.ietf.org/doc/html/rfc1950)  
 [RFC 1952 - gzip](https://datatracker.ietf.org/doc/html/rfc1952)  
 [zlib algorithm  explained](https://github.com/madler/zlib/blob/643e17b7498d12ab8d15565662880579692f769d/doc/algorithm.txt)  
+[zlib manual](https://www.zlib.net/manual.html)  
 [Mark Adler on stackoverflow](https://stackoverflow.com/search?q=user%3A1180620+deflate)  
 [Faster zlib/DEFLATE](https://dougallj.wordpress.com/2022/08/20/faster-zlib-deflate-decompression-on-the-apple-m1-and-x86/)  
 [Reading bits with zero refill latency](https://dougallj.wordpress.com/2022/08/26/reading-bits-with-zero-refill-latency/)  

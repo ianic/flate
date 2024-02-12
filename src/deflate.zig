@@ -130,6 +130,7 @@ fn Deflate(comptime container: Container, comptime WriterType: type, comptime Bl
         prev_literal: ?u8 = null,
 
         const Self = @This();
+
         pub fn init(wrt: WriterType, level: Level) !Self {
             const self = Self{
                 .wrt = wrt,
@@ -282,35 +283,23 @@ fn Deflate(comptime container: Container, comptime WriterType: type, comptime Bl
             self.win.flush();
         }
 
-        // Flush internal buffers to the output writer. Writes deflate block to
-        // the writer. Internal tokens buffer is empty after this.
-        pub fn flush(self: *Self) !void {
-            try self.tokenize(.flush);
-        }
-
         // Slide win and if needed lookup tables.
         fn slide(self: *Self) void {
             const n = self.win.slide();
             self.lookup.slide(n);
         }
 
-        // Flush internal buffers and write deflate final block.
-        pub fn close(self: *Self) !void {
-            try self.tokenize(.final);
-            try container.writeFooter(&self.hasher, self.wrt);
-        }
-
-        pub fn setWriter(self: *Self, new_writer: WriterType) void {
-            self.block_writer.setWriter(new_writer);
-            self.wrt = new_writer;
-        }
-
-        // Writes all data from the input reader of uncompressed data.
-        // It is up to the caller to call flush or close if there is need to
-        // output compressed blocks.
+        /// Compresses as much data as possible, stops when the reader becomes
+        /// empty. It will introduce some output latency (reading input without
+        /// producing all output) because some data are still in internal
+        /// buffers.
+        ///
+        /// It is up to the caller to call flush (if needed) or close (required)
+        /// when is need to output any pending data or complete stream.
+        ///
         pub fn compress(self: *Self, reader: anytype) !void {
             while (true) {
-                // read from rdr into win
+                // Fill window from reader
                 const buf = self.win.writable();
                 if (buf.len == 0) {
                     try self.tokenize(.none);
@@ -320,11 +309,44 @@ fn Deflate(comptime container: Container, comptime WriterType: type, comptime Bl
                 const n = try reader.readAll(buf);
                 self.hasher.update(buf[0..n]);
                 self.win.written(n);
-                // process win
+                // Process window
                 try self.tokenize(.none);
-                // no more data in reader
+                // Exit when no more data in reader
                 if (n < buf.len) break;
             }
+        }
+
+        /// Flushes internal buffers to the output writer. Outputs empty stored
+        /// block to sync bit stream to the byte boundary, so that the
+        /// decompressor can get all input data available so far.
+        ///
+        /// It is useful mainly in compressed network protocols, to ensure that
+        /// deflate bit stream can be used as byte stream. May degrade
+        /// compression so it should be used only when necessary.
+        ///
+        /// Completes the current deflate block and follows it with an empty
+        /// stored block that is three zero bits plus filler bits to the next
+        /// byte, followed by four bytes (00 00 ff ff).
+        ///
+        pub fn flush(self: *Self) !void {
+            try self.tokenize(.flush);
+        }
+
+        /// Completes deflate bit stream by writing any pending data as deflate
+        /// final deflate block. HAS to be called once all data are written to
+        /// the compressor as a signal that next block has to have final bit
+        /// set.
+        ///
+        pub fn close(self: *Self) !void {
+            try self.tokenize(.final);
+            try container.writeFooter(&self.hasher, self.wrt);
+        }
+
+        /// Use another writer while preserving history. Most probably flush
+        /// should be called on old writer before setting new.
+        pub fn setWriter(self: *Self, new_writer: WriterType) void {
+            self.block_writer.setWriter(new_writer);
+            self.wrt = new_writer;
         }
 
         // Writer interface
@@ -332,7 +354,8 @@ fn Deflate(comptime container: Container, comptime WriterType: type, comptime Bl
         pub const Writer = io.Writer(*Self, Error, write);
         pub const Error = BlockWriterType.Error;
 
-        // Write `input` of uncompressed data.
+        /// Write `input` of uncompressed data.
+        /// See compress.
         pub fn write(self: *Self, input: []const u8) !usize {
             var fbs = io.fixedBufferStream(input);
             try self.compress(fbs.reader());
