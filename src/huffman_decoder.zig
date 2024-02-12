@@ -258,43 +258,51 @@ const expect = std.testing.expect;
 
 test "flate.HuffmanDecoder encode/decode literals" {
     const LiteralEncoder = @import("huffman_encoder.zig").LiteralEncoder;
-    var enc: LiteralEncoder = .{};
-    // worst case, all freqencies are used
-    var freq = [_]u16{0} ** 286;
-    for (&freq, 1..) |*f, i| {
-        f.* = @intCast(i);
-    }
-    // encoder from freqencies
-    enc.generate(&freq, 15);
 
-    // generate decoder from code lens
-    var code_lens = [_]u4{0} ** 286;
-    for (code_lens, 0..) |_, i| {
-        code_lens[i] = @intCast(enc.codes[i].len);
-    }
-    var dec: LiteralDecoder = .{};
-    try dec.generate(&code_lens);
+    for (1..286) |j| { // for all different number of codes
+        var enc: LiteralEncoder = .{};
+        // create freqencies
+        var freq = [_]u16{0} ** 286;
+        freq[256] = 1; // ensure we have end of block code
+        for (&freq, 1..) |*f, i| {
+            if (i % j == 0)
+                f.* = @intCast(i);
+        }
 
-    // expect decoder code to match original encoder code
-    for (dec.symbols) |s| {
-        const c_code: u15 = @bitReverse(@as(u15, @intCast(s.code)));
-        const symbol: u16 = switch (s.kind) {
-            .literal => s.symbol,
-            .end_of_block => 256,
-            .match => @as(u16, s.symbol) + 257,
-        };
+        // encoder from freqencies
+        enc.generate(&freq, 15);
 
-        const c = enc.codes[symbol];
-        try expect(c.code == c_code);
-    }
+        // get code_lens from encoder
+        var code_lens = [_]u4{0} ** 286;
+        for (code_lens, 0..) |_, i| {
+            code_lens[i] = @intCast(enc.codes[i].len);
+        }
+        // generate decoder from code lens
+        var dec: LiteralDecoder = .{};
+        try dec.generate(&code_lens);
 
-    // find each symbol by code
-    for (enc.codes) |c| {
-        if (c.len == 0) continue;
+        // expect decoder code to match original encoder code
+        for (dec.symbols) |s| {
+            if (s.code_bits == 0) continue;
+            const c_code: u16 = @bitReverse(@as(u15, @intCast(s.code)));
+            const symbol: u16 = switch (s.kind) {
+                .literal => s.symbol,
+                .end_of_block => 256,
+                .match => @as(u16, s.symbol) + 257,
+            };
 
-        const s_code: u15 = @bitReverse(@as(u15, @intCast(c.code)));
-        const s = try dec.find(s_code);
-        try expect(s.code == s_code);
-        try expect(s.code_bits == c.len);
+            const c = enc.codes[symbol];
+            try expect(c.code == c_code);
+        }
+
+        // find each symbol by code
+        for (enc.codes) |c| {
+            if (c.len == 0) continue;
+
+            const s_code: u15 = @bitReverse(@as(u15, @intCast(c.code)));
+            const s = try dec.find(s_code);
+            try expect(s.code == s_code);
+            try expect(s.code_bits == c.len);
+        }
     }
 }
