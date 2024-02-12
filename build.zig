@@ -62,6 +62,20 @@ pub fn build(b: *std.Build) void {
         bin.root_module.addImport("flate", flate_module);
         b.installArtifact(bin);
     }
+    {
+        const i: Binary = .{ .name = "fuzz_puff", .src = "bin/fuzz_puff.zig" };
+        const bin = b.addExecutable(.{
+            .name = i.name,
+            .root_source_file = .{ .path = i.src },
+            .target = target,
+            .optimize = optimize,
+        });
+        bin.root_module.addImport("flate", flate_module);
+        bin.addIncludePath(.{ .path = "bin/puff" });
+        bin.addCSourceFile(.{ .file = .{ .path = "bin/puff/puff.c" } });
+        bin.linkLibC();
+        b.installArtifact(bin);
+    }
 
     // Benchmarks are embedding bin/bench_data files which has to be present.
     // There is script `get_bench_data.sh` to fill the folder. Some of those

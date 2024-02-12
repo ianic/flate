@@ -32,6 +32,13 @@ pub const LiteralDecoder = HuffmanDecoder(286, 15, 9);
 pub const DistanceDecoder = HuffmanDecoder(30, 15, 9);
 pub const CodegenDecoder = HuffmanDecoder(19, 7, 7);
 
+pub const Error = error{
+    InvalidCode,
+    OversubscribedHuffmanTree,
+    IncompleteHuffmanTree,
+    MissingEndOfBlockCode,
+};
+
 /// Creates huffman tree codes from list of code lengths (in `build`).
 ///
 /// `find` then finds symbol for code bits. Code can be any length between 1 and
@@ -61,7 +68,9 @@ fn HuffmanDecoder(
         const Self = @This();
 
         /// Generates symbols and lookup tables from list of code lens for each symbol.
-        pub fn generate(self: *Self, lens: []const u4) void {
+        pub fn generate(self: *Self, lens: []const u4) !void {
+            try checkCompletnes(lens);
+
             // init alphabet with code_bits
             for (self.symbols, 0..) |_, i| {
                 const cb: u4 = if (i < lens.len) lens[i] else 0;
@@ -84,6 +93,7 @@ fn HuffmanDecoder(
             var code: u16 = 0;
             var idx: u16 = 0;
             for (&self.symbols, 0..) |*sym, pos| {
+                //print("sym: {}\n", .{sym});
                 if (sym.code_bits == 0) continue; // skip unused
                 sym.code = code;
 
@@ -105,6 +115,40 @@ fn HuffmanDecoder(
 
                 idx = next_idx;
                 code = next_code;
+            }
+            //print("decoder generate, code: {d}, idx: {d}\n", .{ code, idx });
+        }
+
+        /// Given the list of code lengths check that it represents a canonical
+        /// Huffman code for n symbols.
+        ///
+        /// Reference: https://github.com/madler/zlib/blob/5c42a230b7b468dff011f444161c0145b5efae59/contrib/puff/puff.c#L340
+        fn checkCompletnes(lens: []const u4) !void {
+            if (alphabet_size == 286)
+                if (lens[256] == 0) return error.MissingEndOfBlockCode;
+
+            var count = [_]u16{0} ** (@as(usize, max_code_bits) + 1);
+            var max: usize = 0;
+            for (lens) |n| {
+                if (n == 0) continue;
+                if (n > max) max = n;
+                count[n] += 1;
+            }
+            if (max == 0) // emtpy tree
+                return;
+
+            // check for an over-subscribed or incomplete set of lengths
+            var left: usize = 1; // one possible code of zero length
+            for (1..count.len) |len| {
+                left <<= 1; // one more bit, double codes left
+                if (count[len] > left)
+                    return error.OversubscribedHuffmanTree;
+                left -= count[len]; // deduct count from possible codes
+            }
+            if (left > 0) { // left > 0 means incomplete
+                // incomplete code ok only for single length 1 code
+                if (max_code_bits > 7 and max == count[0] + count[1]) return;
+                return error.IncompleteHuffmanTree;
             }
         }
 
@@ -136,7 +180,7 @@ test "flate.HuffmanDecoder init/find" {
     // example data from: https://youtu.be/SJPvNi4HrWQ?t=8423
     const code_lens = [_]u4{ 4, 3, 0, 2, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 3, 2 };
     var h: CodegenDecoder = .{};
-    h.generate(&code_lens);
+    try h.generate(&code_lens);
 
     const expected = [_]struct {
         sym: Symbol,
@@ -229,7 +273,7 @@ test "flate.HuffmanDecoder encode/decode literals" {
         code_lens[i] = @intCast(enc.codes[i].len);
     }
     var dec: LiteralDecoder = .{};
-    dec.generate(&code_lens);
+    try dec.generate(&code_lens);
 
     // expect decoder code to match original encoder code
     for (dec.symbols) |s| {
