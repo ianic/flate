@@ -70,11 +70,6 @@ pub const store = struct {
     }
 };
 
-test "flate" {
-    _ = @import("deflate.zig");
-    _ = @import("inflate.zig");
-}
-
 /// Container defines header/footer arround deflate bit stream. Gzip and zlib
 /// compression algorithms are containers arround deflate bit stream body.
 const Container = @import("container.zig").Container;

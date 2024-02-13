@@ -2,6 +2,11 @@ pub const flate = @import("flate.zig");
 pub const gzip = @import("gzip.zig");
 pub const zlib = @import("zlib.zig");
 
+test "flate" {
+    _ = @import("deflate.zig");
+    _ = @import("inflate.zig");
+}
+
 test "flate public interface" {
     const plain_data = [_]u8{ 'H', 'e', 'l', 'l', 'o', ' ', 'w', 'o', 'r', 'l', 'd', 0x0a };
 
