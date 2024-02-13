@@ -1,5 +1,5 @@
 const std = @import("std");
-const gzip = @import("flate").gzip;
+const gzip = @import("compress").gzip;
 
 // Comparable to standard gzip with -kf flags:
 // $ gzip -kfn <file_name>

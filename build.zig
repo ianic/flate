@@ -16,10 +16,10 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const lib = b.addStaticLibrary(.{
-        .name = "deflate",
+        .name = "compress",
         // In this case the main source file is merely a path, however, in more
         // complicated build scripts, this could be a generated file.
-        .root_source_file = .{ .path = "src/flate.zig" },
+        .root_source_file = .{ .path = "src/root.zig" },
         .target = target,
         .optimize = optimize,
     });
@@ -42,8 +42,8 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
 
-    const flate_module = b.addModule("flate", .{
-        .root_source_file = .{ .path = "src/flate.zig" },
+    const compress_module = b.addModule("compress", .{
+        .root_source_file = .{ .path = "src/root.zig" },
     });
 
     const binaries = [_]Binary{
@@ -59,7 +59,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
         });
-        bin.root_module.addImport("flate", flate_module);
+        bin.root_module.addImport("compress", compress_module);
         b.installArtifact(bin);
     }
     {
@@ -70,7 +70,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
         });
-        bin.root_module.addImport("flate", flate_module);
+        bin.root_module.addImport("compress", compress_module);
         bin.addIncludePath(.{ .path = "bin/puff" });
         bin.addCSourceFile(.{ .file = .{ .path = "bin/puff/puff.c" } });
         bin.linkLibC();
@@ -95,7 +95,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
         });
-        bin.root_module.addImport("flate", flate_module);
+        bin.root_module.addImport("compress", compress_module);
         bench_step.dependOn(&b.addInstallArtifact(bin, .{}).step);
     }
 }

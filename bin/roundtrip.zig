@@ -1,5 +1,5 @@
 const std = @import("std");
-const flate = @import("flate");
+const flate = @import("compress").flate;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -11,7 +11,7 @@ pub fn main() !void {
     const data = try stdin.readToEndAlloc(allocator, std.math.maxInt(usize));
     defer allocator.free(data);
 
-    const levels = [_]flate.raw.Level{ .level_4, .level_5, .level_6, .level_7, .level_8, .level_9 };
+    const levels = [_]flate.Level{ .level_4, .level_5, .level_6, .level_7, .level_8, .level_9 };
 
     // For each compression level
     for (levels) |level| {
@@ -20,11 +20,11 @@ pub fn main() !void {
         // Compress the data
         var buf = std.ArrayList(u8).init(allocator);
         defer buf.deinit();
-        try flate.raw.compress(fbs.reader(), buf.writer(), level);
+        try flate.compress(fbs.reader(), buf.writer(), level);
 
         // Now try to decompress it
         var buf_fbs = std.io.fixedBufferStream(buf.items);
-        var inflate = flate.raw.decompressor(buf_fbs.reader());
+        var inflate = flate.decompressor(buf_fbs.reader());
         const inflated = try inflate.reader().readAllAlloc(allocator, std.math.maxInt(usize));
         defer allocator.free(inflated);
 
@@ -39,13 +39,13 @@ pub fn main() !void {
         defer buf.deinit();
 
         // Compress the data
-        var cmp = try flate.raw.huffmanCompressor(buf.writer());
+        var cmp = try flate.huffman.compressor(buf.writer());
         try cmp.compress(fbs.reader());
         try cmp.close();
 
         // Now try to decompress it
         var buf_fbs = std.io.fixedBufferStream(buf.items);
-        var inflate = flate.raw.decompressor(buf_fbs.reader());
+        var inflate = flate.decompressor(buf_fbs.reader());
         const inflated = try inflate.reader().readAllAlloc(allocator, std.math.maxInt(usize));
         defer allocator.free(inflated);
 
@@ -60,13 +60,13 @@ pub fn main() !void {
         defer buf.deinit();
 
         // Compress the data
-        var cmp = try flate.raw.storeCompressor(buf.writer());
+        var cmp = try flate.store.compressor(buf.writer());
         try cmp.compress(fbs.reader());
         try cmp.close();
 
         // Now try to decompress it
         var buf_fbs = std.io.fixedBufferStream(buf.items);
-        var inflate = flate.raw.decompressor(buf_fbs.reader());
+        var inflate = flate.decompressor(buf_fbs.reader());
         const inflated = try inflate.reader().readAllAlloc(allocator, std.math.maxInt(usize));
         defer allocator.free(inflated);
 

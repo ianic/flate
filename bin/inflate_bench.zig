@@ -1,6 +1,5 @@
 const std = @import("std");
-const flate = @import("flate");
-const gzip = flate.gzip;
+const gzip = @import("compress").gzip;
 
 const print = std.debug.print;
 const assert = std.debug.assert;
@@ -60,7 +59,6 @@ pub fn main() !void {
 }
 
 const Options = struct {
-    //output_file: ?std.fs.File = null,
     input_file: ?std.fs.File = null,
     input_size: usize = 0,
 
@@ -102,14 +100,7 @@ pub fn readArgs() !?Options {
         //        if (a[0] == '-') {
         print("Unknown argument {s}!\n", .{a});
         return error.InvalidArgs;
-        //        }
-
-        //        try setInputFile(a, &opt);
     }
-    // if (opt.input_file == null) {
-    //     try setInputFile("bench_data/ziglang.tar.gz", &opt);
-    // }
-
     return opt;
 }
 
@@ -124,62 +115,11 @@ fn setInputFile(file_name: []const u8, opt: *Options) !void {
     opt.input_size = (try uncompressed.stat()).size;
 }
 
-// pub fn main_() !void {
-//     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-//     defer arena.deinit();
-//     const arena_allocator = arena.allocator();
-//     const args = try std.process.argsAlloc(arena_allocator);
-
-//     var i: usize = 1;
-//     while (i < args.len) : (i += 1) {
-//         if (std.mem.eql(u8, args[i], "--std")) {
-//             try stdLibVersion();
-//             return;
-//         } else if (std.mem.eql(u8, args[i], "--profile")) {
-//             try profile();
-//             return;
-//         } else if (std.mem.eql(u8, args[i], "--zero-copy")) {
-//             try zeroCopy();
-//             return;
-//         } else if (std.mem.eql(u8, args[i], "--help")) {
-//             usage();
-//             return;
-//         } else {
-//             usage();
-//             std.os.exit(1);
-//         }
-//     }
-//     try readerInterface();
-// }
-
 fn thisLib(input: anytype) !usize {
     var cw = std.io.countingWriter(std.io.null_writer);
     try gzip.decompress(input, cw.writer());
     return cw.bytes_written;
-
-    // var inf = inflate(input);
-    // var n: usize = 0;
-
-    // while (try inf.nextChunk()) |buf| {
-    //     n += buf.len;
-    // }
-    // return n;
 }
-
-// fn readerInterface() !void {
-//     var fbs = std.io.fixedBufferStream(data);
-//     var inf = inflate(fbs.reader());
-//     var n: usize = 0;
-
-//     var buf: [buffer_len]u8 = undefined;
-//     var rdr = inf.reader();
-//     while (true) {
-//         const i = try rdr.readAll(&buf);
-//         n += i;
-//         if (i < buf.len) break;
-//     }
-//     assert(n == data_bytes);
-// }
 
 const allocator = std.heap.page_allocator;
 
@@ -198,9 +138,3 @@ pub fn stdLib(input: anytype) !usize {
     }
     return n;
 }
-
-// fn profile() !void {
-//     for (0..16) |_| {
-//         try zeroCopy();
-//     }
-// }

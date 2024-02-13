@@ -394,38 +394,40 @@ const Tokens = struct {
 /// Creates huffman only deflate blocks. Disables Lempel-Ziv match searching and
 /// only performs Huffman entropy encoding. Results in faster compression, much
 /// less memory requirements during compression but bigger compressed sizes.
-///
-pub fn HuffmanCompressor(comptime container: Container, comptime WriterType: type) type {
-    return SimpleCompressor(.huffman, container, WriterType);
-}
+pub const huffman = struct {
+    pub fn compress(comptime container: Container, reader: anytype, writer: anytype) !void {
+        var c = try huffman.compressor(container, writer);
+        try c.compress(reader);
+        try c.close();
+    }
 
-pub fn huffmanCompressor(comptime container: Container, writer: anytype) !HuffmanCompressor(container, @TypeOf(writer)) {
-    return try HuffmanCompressor(container, @TypeOf(writer)).init(writer);
-}
+    pub fn Compressor(comptime container: Container, comptime WriterType: type) type {
+        return SimpleCompressor(.huffman, container, WriterType);
+    }
 
-pub fn huffmanCompress(comptime container: Container, reader: anytype, writer: anytype) !void {
-    var c = try huffmanCompressor(container, writer);
-    try c.compress(reader);
-    try c.close();
-}
+    pub fn compressor(comptime container: Container, writer: anytype) !huffman.Compressor(container, @TypeOf(writer)) {
+        return try huffman.Compressor(container, @TypeOf(writer)).init(writer);
+    }
+};
 
 /// Creates store blocks only. Data are not compressed only packed into deflate
 /// store blocks. That adds 9 bytes of header for each block. Max stored block
 /// size is 64K. Block is emitted when flush is called on on close.
-///
-pub fn StoreCompressor(comptime container: Container, comptime WriterType: type) type {
-    return SimpleCompressor(.store, container, WriterType);
-}
+pub const store = struct {
+    pub fn compress(comptime container: Container, reader: anytype, writer: anytype) !void {
+        var c = try store.compressor(container, writer);
+        try c.compress(reader);
+        try c.close();
+    }
 
-pub fn storeCompressor(comptime container: Container, writer: anytype) !StoreCompressor(container, @TypeOf(writer)) {
-    return try StoreCompressor(container, @TypeOf(writer)).init(writer);
-}
+    pub fn Compressor(comptime container: Container, comptime WriterType: type) type {
+        return SimpleCompressor(.store, container, WriterType);
+    }
 
-pub fn storeCompress(comptime container: Container, reader: anytype, writer: anytype) !void {
-    var c = try storeCompressor(container, writer);
-    try c.compress(reader);
-    try c.close();
-}
+    pub fn compressor(comptime container: Container, writer: anytype) !store.Compressor(container, @TypeOf(writer)) {
+        return try store.Compressor(container, @TypeOf(writer)).init(writer);
+    }
+};
 
 const SimpleCompressorKind = enum {
     huffman,
@@ -630,9 +632,9 @@ test "flate.Deflate struct sizes" {
     // var cmp = try std.compress.deflate.compressor(allocator, io.null_writer, .{});
     // defer cmp.deinit();
 
-    const HOC = HuffmanCompressor(.raw, @TypeOf(io.null_writer));
+    const HC = huffman.Compressor(.raw, @TypeOf(io.null_writer));
     //print("size of HOC {d}\n", .{@sizeOf(HOC)});
-    try expect(@sizeOf(HOC) == 77024);
+    try expect(@sizeOf(HC) == 77024);
     // 64K buffer
     // 11480 huffman_encoded
     // 8 buffer write pointer
@@ -761,7 +763,7 @@ test "flate.Deflate store simple compressor" {
     var al = std.ArrayList(u8).init(testing.allocator);
     defer al.deinit();
 
-    var cmp = try storeCompressor(.raw, al.writer());
+    var cmp = try store.compressor(.raw, al.writer());
     try cmp.compress(fbs.reader());
     try cmp.close();
     try testing.expectEqualSlices(u8, &expected, al.items);
@@ -770,7 +772,7 @@ test "flate.Deflate store simple compressor" {
     try al.resize(0);
 
     // huffman only compresoor will also emit store block for this small sample
-    var hc = try huffmanCompressor(.raw, al.writer());
+    var hc = try huffman.compressor(.raw, al.writer());
     try hc.compress(fbs.reader());
     try hc.close();
     try testing.expectEqualSlices(u8, &expected, al.items);

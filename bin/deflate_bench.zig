@@ -1,8 +1,7 @@
 const std = @import("std");
-const flate = @import("flate");
-const raw = flate.raw;
-const gzip = flate.gzip;
-const zlib = flate.zlib;
+const raw = @import("compress").flate;
+const gzip = @import("compress").gzip;
+const zlib = @import("compress").zlib;
 
 const print = std.debug.print;
 
@@ -40,17 +39,17 @@ pub fn run(output: anytype, opt: Options) !void {
     } else {
         if (opt.level == 0) {
             switch (opt.alg) {
-                .deflate => try raw.storeCompress(input, output),
-                .zlib => try zlib.storeCompress(input, output),
-                .gzip => try gzip.storeCompress(input, output),
+                .deflate => try raw.store.compress(input, output),
+                .zlib => try zlib.store.compress(input, output),
+                .gzip => try gzip.store.compress(input, output),
             }
             return;
         }
         if (opt.level == 1) {
             switch (opt.alg) {
-                .deflate => try raw.huffmanCompress(input, output),
-                .zlib => try zlib.huffmanCompress(input, output),
-                .gzip => try gzip.huffmanCompress(input, output),
+                .deflate => try raw.huffman.compress(input, output),
+                .zlib => try zlib.huffman.compress(input, output),
+                .gzip => try gzip.huffman.compress(input, output),
             }
             return;
         }

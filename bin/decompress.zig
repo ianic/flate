@@ -1,5 +1,5 @@
 const std = @import("std");
-const flate = @import("flate");
+const flate = @import("compress").flate;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -14,7 +14,7 @@ pub fn main() !void {
     // Try to parse the data
     var fbs = std.io.fixedBufferStream(data);
     const reader = fbs.reader();
-    var inflate = flate.raw.decompressor(reader);
+    var inflate = flate.decompressor(reader);
 
     const inflated = inflate.reader().readAllAlloc(allocator, std.math.maxInt(usize)) catch |err| {
         std.debug.print("{}\n", .{err});

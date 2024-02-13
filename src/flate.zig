@@ -6,171 +6,84 @@ pub const deflate = @import("deflate.zig");
 /// decompression and correctly produces the original full-size data or file.
 pub const inflate = @import("inflate.zig");
 
-/// Container defines header/footer arround deflate bit stream. Gzip and zlib
-/// compression algorithms are containers arround deflate bit stream body.
-const Container = @import("container.zig").Container;
-
-fn byContainer(comptime container: Container) type {
-    return struct {
-        /// Decompress compressed data from reader and write plain data to the writer.
-        pub fn decompress(reader: anytype, writer: anytype) !void {
-            try inflate.decompress(container, reader, writer);
-        }
-
-        /// Decompressor type
-        pub fn Decompressor(comptime ReaderType: type) type {
-            return inflate.Inflate(container, ReaderType);
-        }
-
-        /// Create Decompressor which will read compressed data from reader.
-        pub fn decompressor(reader: anytype) Decompressor(@TypeOf(reader)) {
-            return inflate.decompressor(container, reader);
-        }
-
-        /// Compression level, trades between speed and compression size.
-        pub const Level = deflate.Level;
-
-        /// Compress plain data from reader and write compressed data to the writer.
-        pub fn compress(reader: anytype, writer: anytype, level: Level) !void {
-            try deflate.compress(container, reader, writer, level);
-        }
-
-        /// Compressor type
-        pub fn Compressor(comptime WriterType: type) type {
-            return deflate.Compressor(container, WriterType);
-        }
-
-        /// Create Compressor which outputs compressed data to the writer.
-        pub fn compressor(writer: anytype, level: Level) !Compressor(@TypeOf(writer)) {
-            return try deflate.compressor(container, writer, level);
-        }
-
-        pub fn HuffmanCompressor(comptime WriterType: type) type {
-            return deflate.HuffmanCompressor(container, WriterType);
-        }
-
-        pub fn huffmanCompress(reader: anytype, writer: anytype) !void {
-            try deflate.huffmanCompress(container, reader, writer);
-        }
-
-        /// Disables Lempel-Ziv match searching and only performs Huffman
-        /// entropy encoding. Results in faster compression, much less memory
-        /// requirements during compression but bigger compressed sizes.
-        pub fn huffmanCompressor(writer: anytype) !HuffmanCompressor(@TypeOf(writer)) {
-            return deflate.huffmanCompressor(container, writer);
-        }
-
-        pub fn StoreCompressor(comptime WriterType: type) type {
-            return deflate.StoreCompressor(container, WriterType);
-        }
-
-        /// Disables Lempel-Ziv match searching and only performs Huffman
-        /// entropy encoding. Results in faster compression, much less memory
-        /// requirements during compression but bigger compressed sizes.
-        pub fn storeCompressor(writer: anytype) !StoreCompressor(@TypeOf(writer)) {
-            return deflate.storeCompressor(container, writer);
-        }
-
-        pub fn storeCompress(reader: anytype, writer: anytype) !void {
-            try deflate.storeCompress(container, reader, writer);
-        }
-    };
+/// Decompress compressed data from reader and write plain data to the writer.
+pub fn decompress(reader: anytype, writer: anytype) !void {
+    try inflate.decompress(.raw, reader, writer);
 }
 
-pub const raw = byContainer(.raw);
-pub const gzip = byContainer(.gzip);
-pub const zlib = byContainer(.zlib);
+/// Decompressor type
+pub fn Decompressor(comptime ReaderType: type) type {
+    return inflate.Inflate(.raw, ReaderType);
+}
+
+/// Create Decompressor which will read compressed data from reader.
+pub fn decompressor(reader: anytype) Decompressor(@TypeOf(reader)) {
+    return inflate.decompressor(.raw, reader);
+}
+
+/// Compression level, trades between speed and compression size.
+pub const Level = deflate.Level;
+
+/// Compress plain data from reader and write compressed data to the writer.
+pub fn compress(reader: anytype, writer: anytype, level: Level) !void {
+    try deflate.compress(.raw, reader, writer, level);
+}
+
+/// Compressor type
+pub fn Compressor(comptime WriterType: type) type {
+    return deflate.Compressor(.raw, WriterType);
+}
+
+/// Create Compressor which outputs compressed data to the writer.
+pub fn compressor(writer: anytype, level: Level) !Compressor(@TypeOf(writer)) {
+    return try deflate.compressor(.raw, writer, level);
+}
+
+/// Disables Lempel-Ziv match searching and only performs Huffman
+/// entropy encoding. Results in faster compression, much less memory
+/// requirements during compression but bigger compressed sizes.
+pub const huffman = struct {
+    pub fn compress(reader: anytype, writer: anytype) !void {
+        try deflate.huffman.compress(.raw, reader, writer);
+    }
+
+    pub fn Compressor(comptime WriterType: type) type {
+        return deflate.huffman.Compressor(.raw, WriterType);
+    }
+
+    pub fn compressor(writer: anytype) !huffman.Compressor(@TypeOf(writer)) {
+        return deflate.huffman.compressor(.raw, writer);
+    }
+};
+
+pub const store = struct {
+    pub fn compress(reader: anytype, writer: anytype) !void {
+        try deflate.store.compress(.raw, reader, writer);
+    }
+
+    pub fn Compressor(comptime WriterType: type) type {
+        return deflate.store.Compressor(.raw, WriterType);
+    }
+
+    pub fn compressor(writer: anytype) !store.Compressor(@TypeOf(writer)) {
+        return deflate.store.compressor(.raw, writer);
+    }
+};
 
 test "flate" {
     _ = @import("deflate.zig");
     _ = @import("inflate.zig");
 }
 
+/// Container defines header/footer arround deflate bit stream. Gzip and zlib
+/// compression algorithms are containers arround deflate bit stream body.
+const Container = @import("container.zig").Container;
 const std = @import("std");
 const testing = std.testing;
+const fixedBufferStream = std.io.fixedBufferStream;
 const print = std.debug.print;
 
-test "flate decompress" {
-    const deflate_block = [_]u8{
-        0b0000_0001, 0b0000_1100, 0x00, 0b1111_0011, 0xff, // deflate fixed buffer header len, nlen
-        'H', 'e', 'l', 'l', 'o', ' ', 'w', 'o', 'r', 'l', 'd', 0x0a, // non compressed data
-    };
-    const gzip_block =
-        [_]u8{ 0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03 } ++ // gzip header (10 bytes)
-        deflate_block ++
-        [_]u8{ 0xd5, 0xe0, 0x39, 0xb7, 0x0c, 0x00, 0x00, 0x00 }; // gzip footer checksum (4 byte), size (4 bytes)
-    const zlib_block = [_]u8{ 0x78, 0b10_0_11100 } ++ // zlib header (2 bytes)}
-        deflate_block ++
-        [_]u8{ 0x1c, 0xf2, 0x04, 0x47 }; // zlib footer: checksum
-
-    const expected = "Hello world\n";
-
-    var raw_in = std.io.fixedBufferStream(&deflate_block);
-    var gzip_in = std.io.fixedBufferStream(&gzip_block);
-    var zlib_in = std.io.fixedBufferStream(&zlib_block);
-
-    // raw deflate
-    {
-        var out = std.ArrayList(u8).init(testing.allocator);
-        defer out.deinit();
-
-        try raw.decompress(raw_in.reader(), out.writer());
-        try testing.expectEqualStrings(expected, out.items);
-    }
-    // gzip
-    {
-        var out = std.ArrayList(u8).init(testing.allocator);
-        defer out.deinit();
-
-        try gzip.decompress(gzip_in.reader(), out.writer());
-        try testing.expectEqualStrings(expected, out.items);
-    }
-    // zlib
-    {
-        var out = std.ArrayList(u8).init(testing.allocator);
-        defer out.deinit();
-
-        try zlib.decompress(zlib_in.reader(), out.writer());
-        try testing.expectEqualStrings(expected, out.items);
-    }
-
-    // raw with decompressor interface
-    {
-        raw_in.reset();
-        var cmp = raw.decompressor(raw_in.reader());
-        try testing.expectEqualStrings(expected, (try cmp.next()).?);
-        try testing.expect((try cmp.next()) == null);
-    }
-    var buf: [128]u8 = undefined;
-    // raw with decompressor reader interface
-    {
-        raw_in.reset();
-        var cmp = raw.decompressor(raw_in.reader());
-        var rdr = cmp.reader();
-        const n = try rdr.readAll(&buf);
-        try testing.expectEqualStrings(expected, buf[0..n]);
-    }
-    // gzip decompressor
-    {
-        gzip_in.reset();
-        var cmp = gzip.decompressor(gzip_in.reader());
-        var rdr = cmp.reader();
-        const n = try rdr.readAll(&buf);
-        try testing.expectEqualStrings(expected, buf[0..n]);
-    }
-    // zlib decompressor
-    {
-        zlib_in.reset();
-        var cmp = zlib.decompressor(zlib_in.reader());
-        var rdr = cmp.reader();
-        const n = try rdr.readAll(&buf);
-        try testing.expectEqualStrings(expected, buf[0..n]);
-    }
-}
-
 test "flate compress/decompress" {
-    const fixedBufferStream = std.io.fixedBufferStream;
-
     var cmp_buf: [64 * 1024]u8 = undefined; // compressed data buffer
     var dcm_buf: [64 * 1024]u8 = undefined; // decompressed data buffer
 
@@ -272,7 +185,7 @@ test "flate compress/decompress" {
                 {
                     var original = fixedBufferStream(data);
                     var compressed = fixedBufferStream(&cmp_buf);
-                    var cmp = try deflate.huffmanCompressor(container, compressed.writer());
+                    var cmp = try deflate.huffman.compressor(container, compressed.writer());
                     try cmp.compress(original.reader());
                     try cmp.close();
                     if (compressed_size == 0) {
@@ -304,7 +217,7 @@ test "flate compress/decompress" {
                 {
                     var original = fixedBufferStream(data);
                     var compressed = fixedBufferStream(&cmp_buf);
-                    var cmp = try deflate.storeCompressor(container, compressed.writer());
+                    var cmp = try deflate.store.compressor(container, compressed.writer());
                     try cmp.compress(original.reader());
                     try cmp.close();
                     if (compressed_size == 0) {

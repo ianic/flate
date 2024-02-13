@@ -1,5 +1,5 @@
 const std = @import("std");
-const flate = @import("flate");
+const flate = @import("compress").flate;
 const c = @cImport(@cInclude("puff.h"));
 
 pub export fn main() void {
@@ -28,7 +28,7 @@ pub fn zigMain() !void {
 
     var fbs = std.io.fixedBufferStream(data);
     const reader = fbs.reader();
-    var inflate = flate.raw.decompressor(reader);
+    var inflate = flate.decompressor(reader);
 
     var zig_error: anyerror = error.NoError;
     const inflated: ?[]u8 = inflate.reader().readAllAlloc(allocator, std.math.maxInt(usize)) catch |err| blk: {
