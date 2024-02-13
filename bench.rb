@@ -1,12 +1,12 @@
 require 'json'
 
-$levels = [0] + (4..9).to_a
+$levels = [0, 1] + (4..9).to_a
 
 def deflate_bench
   `mkdir -p tmp`
   # file="bin/bench_data/war_and_peace.txt"
   file="bin/bench_data/ziglang.tar"
-  `zig build bench -Doptimize=ReleaseSafe`
+  `zig build bench -Doptimize=ReleaseFast`
   $levels.each do |level|
     `hyperfine --warmup 1 -r 3 'zig-out/bin/deflate_bench -l #{level} #{file}' 'zig-out/bin/deflate_bench -s -l #{level} #{file}' --export-json tmp/bench_#{level}.json`
     `zig-out/bin/deflate_bench -l #{level} 2>tmp/size_#{level} #{file}`
@@ -70,7 +70,7 @@ end
 def inflate_bench
   data = []
 
-  `zig build bench -Doptimize=ReleaseSafe`
+  `zig build bench -Doptimize=ReleaseFast`
   (0..3).to_a.each do |input|
     `hyperfine --warmup 1 -r 3 'zig-out/bin/inflate_bench -i #{input}' 'zig-out/bin/inflate_bench -s -i #{input}' --export-json tmp/inflate_#{input}.json`
 
@@ -125,7 +125,7 @@ $inputs = [
     },
 ];
 
-#deflate_bench
-#print_deflate_bench
-
 inflate_bench
+
+deflate_bench
+print_deflate_bench
