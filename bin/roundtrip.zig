@@ -11,7 +11,7 @@ pub fn main() !void {
     const data = try stdin.readToEndAlloc(allocator, std.math.maxInt(usize));
     defer allocator.free(data);
 
-    const levels = [_]flate.Level{ .level_4, .level_5, .level_6, .level_7, .level_8, .level_9 };
+    const levels = [_]flate.deflate.Level{ .level_4, .level_5, .level_6, .level_7, .level_8, .level_9 };
 
     // For each compression level
     for (levels) |level| {
@@ -20,7 +20,7 @@ pub fn main() !void {
         // Compress the data
         var buf = std.ArrayList(u8).init(allocator);
         defer buf.deinit();
-        try flate.compress(fbs.reader(), buf.writer(), level);
+        try flate.compress(fbs.reader(), buf.writer(), .{ .level = level });
 
         // Now try to decompress it
         var buf_fbs = std.io.fixedBufferStream(buf.items);

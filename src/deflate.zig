@@ -12,6 +12,10 @@ const Container = @import("container.zig").Container;
 const SlidingWindow = @import("SlidingWindow.zig");
 const Lookup = @import("Lookup.zig");
 
+pub const Options = struct {
+    level: Level = .default,
+};
+
 /// Trades between speed and compression size.
 /// Starts with level 4: in [zlib](https://github.com/madler/zlib/blob/abd3d1a28930f89375d4b41408b39f6c1be157b2/deflate.c#L115C1-L117C43)
 /// levels 1-3 are using different algorithm to perform faster but with less
@@ -49,18 +53,18 @@ const LevelArgs = struct {
 };
 
 /// Compress plain data from reader into compressed stream written to writer.
-pub fn compress(comptime container: Container, reader: anytype, writer: anytype, level: Level) !void {
-    var c = try compressor(container, writer, level);
+pub fn compress(comptime container: Container, reader: anytype, writer: anytype, options: Options) !void {
+    var c = try compressor(container, writer, options);
     try c.compress(reader);
     try c.close();
 }
 
 /// Create compressor for writer type.
-pub fn compressor(comptime container: Container, writer: anytype, level: Level) !Compressor(
+pub fn compressor(comptime container: Container, writer: anytype, options: Options) !Compressor(
     container,
     @TypeOf(writer),
 ) {
-    return try Compressor(container, @TypeOf(writer)).init(writer, level);
+    return try Compressor(container, @TypeOf(writer)).init(writer, options);
 }
 
 /// Compressor type.
@@ -131,11 +135,11 @@ fn Deflate(comptime container: Container, comptime WriterType: type, comptime Bl
 
         const Self = @This();
 
-        pub fn init(wrt: WriterType, level: Level) !Self {
+        pub fn init(wrt: WriterType, options: Options) !Self {
             const self = Self{
                 .wrt = wrt,
                 .block_writer = BlockWriterType.init(wrt),
-                .level = LevelArgs.get(level),
+                .level = LevelArgs.get(options.level),
             };
             try container.writeHeader(self.wrt);
             return self;
@@ -549,7 +553,7 @@ test "flate.Deflate tokenization" {
         inline for (Container.list) |container| { // for each wrapping
             var cw = io.countingWriter(io.null_writer);
             const cww = cw.writer();
-            var df = try Deflate(container, @TypeOf(cww), TestTokenWriter).init(cww, .default);
+            var df = try Deflate(container, @TypeOf(cww), TestTokenWriter).init(cww, .{});
 
             _ = try df.write(c.data);
             try df.flush();
@@ -688,7 +692,7 @@ test "flate deflate file tokenization" {
             // create compressor
             const WriterType = @TypeOf(writer);
             const TokenWriter = TokenDecoder(@TypeOf(writer));
-            var cmp = try Deflate(.raw, WriterType, TokenWriter).init(writer, level);
+            var cmp = try Deflate(.raw, WriterType, TokenWriter).init(writer, .{ .level = level });
 
             // Stream uncompressed `orignal` data to the compressor. It will
             // produce tokens list and pass that list to the TokenDecoder. This

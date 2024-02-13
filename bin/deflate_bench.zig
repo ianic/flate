@@ -53,11 +53,11 @@ pub fn run(output: anytype, opt: Options) !void {
             }
             return;
         }
-        const level: raw.Level = @enumFromInt(opt.level);
+        const level: raw.deflate.Level = @enumFromInt(opt.level);
         switch (opt.alg) {
-            .deflate => try raw.compress(input, output, level),
-            .zlib => try zlib.compress(input, output, level),
-            .gzip => try gzip.compress(input, output, level),
+            .deflate => try raw.compress(input, output, .{ .level = level }),
+            .zlib => try zlib.compress(input, output, .{ .level = level }),
+            .gzip => try gzip.compress(input, output, .{ .level = level }),
             // .gzip => {
             //     var buf: [4096]u8 = undefined;
             //     var cmp = try gzip.compressor(output, level);

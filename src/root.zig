@@ -49,7 +49,7 @@ fn testInterface(comptime pkg: type, gzip_data: []const u8, plain_data: []const 
     // compress/decompress
     {
         var in = fixedBufferStream(plain_data);
-        try pkg.compress(in.reader(), compressed.writer(), .default);
+        try pkg.compress(in.reader(), compressed.writer(), .{});
         compressed.reset();
         try pkg.decompress(compressed.reader(), plain.writer());
         try testing.expectEqualSlices(u8, plain_data, plain.getWritten());
@@ -60,7 +60,7 @@ fn testInterface(comptime pkg: type, gzip_data: []const u8, plain_data: []const 
     // compressor/decompressor
     {
         var in = fixedBufferStream(plain_data);
-        var cmp = try pkg.compressor(compressed.writer(), .default);
+        var cmp = try pkg.compressor(compressed.writer(), .{});
         try cmp.compress(in.reader());
         try cmp.close();
 

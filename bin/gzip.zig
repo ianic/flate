@@ -17,6 +17,6 @@ pub fn main() !void {
         var output_file = try std.fs.cwd().createFile(output_file_name, .{ .truncate = true });
         defer output_file.close();
 
-        try gzip.compress(input_file.reader(), output_file.writer(), .default);
+        try gzip.compress(input_file.reader(), output_file.writer(), .{});
     }
 }

@@ -22,11 +22,11 @@ pub fn decompressor(reader: anytype) Decompressor(@TypeOf(reader)) {
 }
 
 /// Compression level, trades between speed and compression size.
-pub const Level = deflate.Level;
+pub const Options = deflate.Options;
 
 /// Compress plain data from reader and write compressed data to the writer.
-pub fn compress(reader: anytype, writer: anytype, level: Level) !void {
-    try deflate.compress(.raw, reader, writer, level);
+pub fn compress(reader: anytype, writer: anytype, options: Options) !void {
+    try deflate.compress(.raw, reader, writer, options);
 }
 
 /// Compressor type
@@ -35,8 +35,8 @@ pub fn Compressor(comptime WriterType: type) type {
 }
 
 /// Create Compressor which outputs compressed data to the writer.
-pub fn compressor(writer: anytype, level: Level) !Compressor(@TypeOf(writer)) {
-    return try deflate.compressor(.raw, writer, level);
+pub fn compressor(writer: anytype, options: Options) !Compressor(@TypeOf(writer)) {
+    return try deflate.compressor(.raw, writer, options);
 }
 
 /// Huffman only compression. Without Lempel-Ziv match searching. Faster
@@ -136,7 +136,7 @@ test "flate compress/decompress" {
                 {
                     var original = fixedBufferStream(data);
                     var compressed = fixedBufferStream(&cmp_buf);
-                    try deflate.compress(container, original.reader(), compressed.writer(), level);
+                    try deflate.compress(container, original.reader(), compressed.writer(), .{ .level = level });
                     if (compressed_size == 0) {
                         if (container == .gzip)
                             print("case {d} gzip level {} compressed size: {d}\n", .{ case_no, level, compressed.pos });
@@ -155,7 +155,7 @@ test "flate compress/decompress" {
                 // compressor writer interface
                 {
                     var compressed = fixedBufferStream(&cmp_buf);
-                    var cmp = try deflate.compressor(container, compressed.writer(), level);
+                    var cmp = try deflate.compressor(container, compressed.writer(), .{ .level = level });
                     var cmp_wrt = cmp.writer();
                     try cmp_wrt.writeAll(data);
                     try cmp.close();

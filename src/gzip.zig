@@ -17,11 +17,11 @@ pub fn decompressor(reader: anytype) Decompressor(@TypeOf(reader)) {
 }
 
 /// Compression level, trades between speed and compression size.
-pub const Level = deflate.Level;
+pub const Options = deflate.Options;
 
 /// Compress plain data from reader and write compressed data to the writer.
-pub fn compress(reader: anytype, writer: anytype, level: Level) !void {
-    try deflate.compress(.gzip, reader, writer, level);
+pub fn compress(reader: anytype, writer: anytype, options: Options) !void {
+    try deflate.compress(.gzip, reader, writer, options);
 }
 
 /// Compressor type
@@ -30,8 +30,8 @@ pub fn Compressor(comptime WriterType: type) type {
 }
 
 /// Create Compressor which outputs compressed data to the writer.
-pub fn compressor(writer: anytype, level: Level) !Compressor(@TypeOf(writer)) {
-    return try deflate.compressor(.gzip, writer, level);
+pub fn compressor(writer: anytype, options: Options) !Compressor(@TypeOf(writer)) {
+    return try deflate.compressor(.gzip, writer, options);
 }
 
 /// Huffman only compression. Without Lempel-Ziv match searching. Faster
