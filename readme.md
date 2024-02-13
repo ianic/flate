@@ -7,7 +7,7 @@ Here I used all those three as reference, but mostly started from scratch. Infla
 ## Benchmark
 
 Comparing this implementation with the one we currently have in Zig's standard library (std).   
-Std is roughly 1.5 times slower in decompression, and 1.17 times slower in compression. Compressed sizes are pretty much same in both cases.  
+Std is roughly 1.2-1.4 times slower in decompression, and 1.1-1.2 times slower in compression. Compressed sizes are pretty much same in both cases.  
 
 Benchmark are done on aarch64/Linux (Apple M1 cpu): 
 
@@ -18,34 +18,36 @@ Compression examples are using Zig repository tar ~177M file.
 Compression time in comparison with std (current Zig standard library implementation):
 | level | time [ms] | std [ms] | time/std  |
 | :---  |      ---: |     ---: |      ---: |
-|0 | 472.83 | 543.02 | 1.15 |
-|4 | 1019.52 | 1222.02 | 1.2 |
-|5 | 1401.85 | 1673.52 | 1.19 |
-|**6 - default** | 1994.97 | 2325.23 | 1.17 |
-|7 | 2505.55 | 3141.31 | 1.25 |
-|8 | 4491.72 | 5118.71 | 1.14 |
-|9 | 6713.99 | 8243.63 | 1.23 |
+| store | 16.42 | 20.29 | 1.24 |
+| huffman only | 442.32 | 587.74 | 1.33 |
+| 4 | 912.58 | 1002.99 | 1.1 |
+| 5 | 1258.05 | 1429.21 | 1.14 |
+| 6 - default | 1824.60 | 2065.15 | 1.13 |
+| 7 | 2291.04 | 2798.50 | 1.22 |
+| 8 | 4158.42 | 4706.27 | 1.13 |
+| 9 | 6268.29 | 7738.94 | 1.23 |
 
 Compressed size in comparison with std:
 | level | size | std size |  diff | size/std  |
 | :---  | ---: |     ---: |  ---: |      ---: |
-| 0 | 108398793 | 108397986 | -807 | 1.0000 |
-| 4 | 26610575 | 26557083 | -53492 | 0.9980 |
-| 5 | 25231037 | 25212703 | -18334 | 0.9993 |
-|**6 - default** | 24716324 | 24716123 | -201 | 1.0000 |
-| 7 | 24572126 | 24562137 | -9989 | 0.9996 |
-| 8 | 24419542 | 24425085 | 5543 | 1.0002 |
-| 9 | 24370948 | 24389533 | 18585 | 1.0008 |
+| store | 177257685 | 177257690 | 5 | 1.0000 |
+| huffman only | 108397982 | 108397986 | 4 | 1.0000 |
+| 4 | 26610356 | 26557083 | -53273 | 0.9980 |
+| 5 | 25230832 | 25212703 | -18129 | 0.9993 |
+| 6 - default | 24716132 | 24716123 | -9 | 1.0000 |
+| 7 | 24571921 | 24562137 | -9784 | 0.9996 |
+| 8 | 24419337 | 24425085 | 5748 | 1.0002 |
+| 9 | 24370739 | 24389533 | 18794 | 1.0008 |
 
 ### Decompression
 
 Decompression time for few different files in comparison with std:
 | file | size |  time [ms] | std [ms] | time/std  |
 | :--- | ---: |       ---: |     ---: |      ---: |
-| ziglang.tar.gz | 177244160  | 353.34 | 519.44 | 1.47 |
-| war_and_peace.txt.gz | 3359630  | 13.55 | 21.36 | 1.58 |
-| large.tar.gz | 11162624  | 37.93 | 57.53 | 1.52 |
-| cantrbry.tar.gz | 2821120  | 9.08 | 14.30 | 1.57 |
+| ziglang.tar.gz | 177244160  | 364.36 | 451.88 | 1.24 |
+| war_and_peace.txt.gz | 3359630  | 13.65 | 18.51 | 1.36 |
+| large.tar.gz | 11162624  | 38.31 | 49.71 | 1.3 |
+| cantrbry.tar.gz | 2821120  | 9.33 | 12.19 | 1.31 |
 
 URLs from which tests files are obtained can be found [here](https://github.com/ianic/flate/blob/2dda0321a658e52e6b3978f7216744af696b69c0/get_bench_data.sh#L6).
 
@@ -68,21 +70,23 @@ Running same benchmarks on x86_64 GNU/Linux (Intel(R) Core(TM) i7-3520M CPU @ 2.
 
 | level | time [ms] | std [ms] | time/std  |
 | :---  |      ---: |     ---: |      ---: |
-|0 | 602.97 | 740.39 | 1.23 |
-|4 | 1434.57 | 1837.89 | 1.28 |
-|5 | 1875.17 | 2454.04 | 1.31 |
-|6 | 2581.49 | 3353.04 | 1.3 |
-|7 | 3211.47 | 4749.88 | 1.48 |
-|8 | 6444.44 | 7359.56 | 1.14 |
-|9 | 8175.93 | 11447.38 | 1.4 |
+| store | 17.87 | 37.71 | 2.11 |
+| huffman only | 536.96 | 712.69 | 1.33 |
+|4 | 1298.81 | 1611.90 | 1.24 |
+|5 | 1682.73 | 2181.59 | 1.3 |
+|6 - default | 2328.75 | 3092.51 | 1.33 |
+|7 | 2888.99 | 4220.92 | 1.46 |
+|8 | 5100.41 | 7001.97 | 1.37 |
+|9 | 7265.84 | 10723.13 | 1.48 |
 
 
 | file | size |  time [ms] | std [ms] | time/std  |
 | :--- | ---: |       ---: |     ---: |      ---: |
-| ziglang.tar.gz | 177244160  | 567.85 | 858.50 | 1.51 |
-| war_and_peace.txt.gz | 3359630  | 25.96 | 36.04 | 1.39 |
-| large.tar.gz | 11162624  | 65.68 | 99.80 | 1.52 |
-| cantrbry.tar.gz | 2821120  | 17.69 | 26.85 | 1.52 |
+| ziglang.tar.gz | 177244160  | 538.45 | 680.66 | 1.26 |
+| war_and_peace.txt.gz | 3359630  | 21.73 | 31.22 | 1.44 |
+| large.tar.gz | 11162624  | 62.02 | 74.89 | 1.21 |
+| cantrbry.tar.gz | 2821120  | 14.77 | 21.39 | 1.45 |
+
 
 ## Memory usage
 
@@ -97,31 +101,27 @@ Inflate difference is because we here use 64K history instead of 32K in std.
 
 Currently in std lib we have different wording for the same things. Type is called Decompressor, Decompress, DecompressStream (deflate, gzip, zlib). I'll suggest that we stick with Decompressor/Compressor and decompressor/compressor for initializers of that type. That will free compress/decompress word for one-shot action. Fn compress receives reader and writer, reads all plain data from reader and writes compressed data to the writer. I expect that many places can use this simple implementation.  
 
-All gzip/zlib/flate will have same methods, here on the gzip example:
+All gzip/zlib/flate will have same methods:
 ```Zig
-const std = @import("std");
-const gzip = std.compress.gzip;
-const zlib = std.compress.zlib;
-const flate = std.compress.flate;
+/// Compress from reader and write compressed data to the writer.
+fn compress(reader: anytype, writer: anytype, options: Options) !void 
 
-/// Decompress compressed data from reader and write plain data to the writer.
-gzip.decompress(reader: anytype, writer: anytype) !void
-
-/// Create Decompressor which will read compressed data from reader.
-gzip.decompressor(reader: anytype) gzip.Decompressor(@TypeOf(reader)) 
-
-/// Decompressor type
-gzip.Decompressor(comptime ReaderType: type) type {
-
-
-/// Compress plain data from reader and write compressed data to the writer.
-gzip.compress(reader: anytype, writer: anytype, level: Level) !void 
-
-/// Create Compressor which outputs compressed data to the writer.
-gzip.compressor(writer: anytype, level: Level) !gzip.Compressor(@TypeOf(writer)) 
+/// Create Compressor which outputs the writer.
+fn compressor(writer: anytype, options: Options) !Compressor(@TypeOf(writer))
 
 /// Compressor type
-gzip.Compressor(comptime WriterType: type) type 
+fn Compressor(comptime WriterType: type) type 
+
+
+/// Decompress from reader and write plain data to the writer.
+fn decompress(reader: anytype, writer: anytype) !void
+
+/// Create Decompressor which reads from reader.
+fn decompressor(reader: anytype) Decompressor(@TypeOf(reader)
+
+/// Decompressor type
+fn Decompressor(comptime ReaderType: type) type
+ 
 ```
 
 ## References
