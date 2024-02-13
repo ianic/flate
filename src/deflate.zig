@@ -669,11 +669,11 @@ test "flate deflate file tokenization" {
             .tokens_count = .{ 235, 234, 234, 234, 234, 234 },
         },
         .{
-            .data = @embedFile("testdata/fuzz/roundtrip1"),
+            .data = @embedFile("testdata/fuzz/roundtrip1.input"),
             .tokens_count = .{ 333, 331, 331, 331, 331, 331 },
         },
         .{
-            .data = @embedFile("testdata/fuzz/roundtrip2"),
+            .data = @embedFile("testdata/fuzz/roundtrip2.input"),
             .tokens_count = .{ 334, 334, 334, 334, 334, 334 },
         },
     };

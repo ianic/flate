@@ -97,19 +97,19 @@ test "flate compress/decompress" {
             .store_size = 36967,
         },
         .{
-            .data = @embedFile("testdata/fuzz/roundtrip1"),
+            .data = @embedFile("testdata/fuzz/roundtrip1.input"),
             .gzip_sizes = [_]usize{ 373, 370, 370, 370, 370, 370 },
             .huffman_only_size = 393,
             .store_size = 393,
         },
         .{
-            .data = @embedFile("testdata/fuzz/roundtrip2"),
+            .data = @embedFile("testdata/fuzz/roundtrip2.input"),
             .gzip_sizes = [_]usize{ 373, 373, 373, 373, 373, 373 },
             .huffman_only_size = 394,
             .store_size = 394,
         },
         .{
-            .data = @embedFile("testdata/fuzz/deflate-stream-out"),
+            .data = @embedFile("testdata/fuzz/deflate-stream.expect"),
             .gzip_sizes = [_]usize{ 351, 347, 347, 347, 347, 347 },
             .huffman_only_size = 498,
             .store_size = 747,
