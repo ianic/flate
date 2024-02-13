@@ -39,9 +39,8 @@ pub fn compressor(writer: anytype, level: Level) !Compressor(@TypeOf(writer)) {
     return try deflate.compressor(.raw, writer, level);
 }
 
-/// Disables Lempel-Ziv match searching and only performs Huffman
-/// entropy encoding. Results in faster compression, much less memory
-/// requirements during compression but bigger compressed sizes.
+/// Huffman only compression. Without Lempel-Ziv match searching. Faster
+/// compression, less memory requirements but bigger compressed sizes.
 pub const huffman = struct {
     pub fn compress(reader: anytype, writer: anytype) !void {
         try deflate.huffman.compress(.raw, reader, writer);
@@ -56,6 +55,7 @@ pub const huffman = struct {
     }
 };
 
+// No compression store only. Compressed size is slightly bigger than plain.
 pub const store = struct {
     pub fn compress(reader: anytype, writer: anytype) !void {
         try deflate.store.compress(.raw, reader, writer);
