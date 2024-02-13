@@ -62,7 +62,7 @@ fn testInterface(comptime pkg: type, gzip_data: []const u8, plain_data: []const 
         var in = fixedBufferStream(plain_data);
         var cmp = try pkg.compressor(compressed.writer(), .{});
         try cmp.compress(in.reader());
-        try cmp.close();
+        try cmp.finish();
 
         compressed.reset();
         var dcp = pkg.decompressor(compressed.reader());
@@ -90,7 +90,7 @@ fn testInterface(comptime pkg: type, gzip_data: []const u8, plain_data: []const 
             var in = fixedBufferStream(plain_data);
             var cmp = try pkg.huffman.compressor(compressed.writer());
             try cmp.compress(in.reader());
-            try cmp.close();
+            try cmp.finish();
 
             compressed.reset();
             try pkg.decompress(compressed.reader(), plain.writer());
@@ -118,7 +118,7 @@ fn testInterface(comptime pkg: type, gzip_data: []const u8, plain_data: []const 
             var in = fixedBufferStream(plain_data);
             var cmp = try pkg.store.compressor(compressed.writer());
             try cmp.compress(in.reader());
-            try cmp.close();
+            try cmp.finish();
 
             compressed.reset();
             try pkg.decompress(compressed.reader(), plain.writer());

@@ -56,7 +56,7 @@ const LevelArgs = struct {
 pub fn compress(comptime container: Container, reader: anytype, writer: anytype, options: Options) !void {
     var c = try compressor(container, writer, options);
     try c.compress(reader);
-    try c.close();
+    try c.finish();
 }
 
 /// Create compressor for writer type.
@@ -84,7 +84,7 @@ pub fn Compressor(comptime container: Container, comptime WriterType: type) type
 ///
 /// Block writer will decide which type of deflate block to write (stored, fixed,
 /// dynamic) and encode tokens to the output byte stream. Client has to call
-/// `close` to write block with the final bit set.
+/// `finish` to write block with the final bit set.
 ///
 /// Container defines type of header and footer which can be gzip, zlib or raw.
 /// They all share same deflate body. Raw has no header or footer just deflate
@@ -298,7 +298,7 @@ fn Deflate(comptime container: Container, comptime WriterType: type, comptime Bl
         /// producing all output) because some data are still in internal
         /// buffers.
         ///
-        /// It is up to the caller to call flush (if needed) or close (required)
+        /// It is up to the caller to call flush (if needed) or finish (required)
         /// when is need to output any pending data or complete stream.
         ///
         pub fn compress(self: *Self, reader: anytype) !void {
@@ -341,7 +341,7 @@ fn Deflate(comptime container: Container, comptime WriterType: type, comptime Bl
         /// the compressor as a signal that next block has to have final bit
         /// set.
         ///
-        pub fn close(self: *Self) !void {
+        pub fn finish(self: *Self) !void {
             try self.tokenize(.final);
             try container.writeFooter(&self.hasher, self.wrt);
         }
@@ -402,7 +402,7 @@ pub const huffman = struct {
     pub fn compress(comptime container: Container, reader: anytype, writer: anytype) !void {
         var c = try huffman.compressor(container, writer);
         try c.compress(reader);
-        try c.close();
+        try c.finish();
     }
 
     pub fn Compressor(comptime container: Container, comptime WriterType: type) type {
@@ -416,12 +416,12 @@ pub const huffman = struct {
 
 /// Creates store blocks only. Data are not compressed only packed into deflate
 /// store blocks. That adds 9 bytes of header for each block. Max stored block
-/// size is 64K. Block is emitted when flush is called on on close.
+/// size is 64K. Block is emitted when flush is called on on finish.
 pub const store = struct {
     pub fn compress(comptime container: Container, reader: anytype, writer: anytype) !void {
         var c = try store.compressor(container, writer);
         try c.compress(reader);
-        try c.close();
+        try c.finish();
     }
 
     pub fn Compressor(comptime container: Container, comptime WriterType: type) type {
@@ -477,7 +477,7 @@ fn SimpleCompressor(
             try self.block_writer.flush();
         }
 
-        pub fn close(self: *Self) !void {
+        pub fn finish(self: *Self) !void {
             try self.flushBuffer(true);
             try self.block_writer.flush();
             try container.writeFooter(&self.hasher, self.wrt);
@@ -493,7 +493,7 @@ fn SimpleCompressor(
         }
 
         // Writes all data from the input reader of uncompressed data.
-        // It is up to the caller to call flush or close if there is need to
+        // It is up to the caller to call flush or finish if there is need to
         // output compressed blocks.
         pub fn compress(self: *Self, reader: anytype) !void {
             while (true) {
@@ -563,7 +563,7 @@ test "flate.Deflate tokenization" {
             try testing.expectEqualSlices(Token, df.block_writer.get(), c.tokens); // tokens match
 
             try testing.expectEqual(container.headerSize(), cw.bytes_written);
-            try df.close();
+            try df.finish();
             try testing.expectEqual(container.size(), cw.bytes_written);
         }
     }
@@ -769,7 +769,7 @@ test "flate.Deflate store simple compressor" {
 
     var cmp = try store.compressor(.raw, al.writer());
     try cmp.compress(fbs.reader());
-    try cmp.close();
+    try cmp.finish();
     try testing.expectEqualSlices(u8, &expected, al.items);
 
     fbs.reset();
@@ -778,6 +778,6 @@ test "flate.Deflate store simple compressor" {
     // huffman only compresoor will also emit store block for this small sample
     var hc = try huffman.compressor(.raw, al.writer());
     try hc.compress(fbs.reader());
-    try hc.close();
+    try hc.finish();
     try testing.expectEqualSlices(u8, &expected, al.items);
 }

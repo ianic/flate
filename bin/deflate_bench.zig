@@ -67,7 +67,7 @@ pub fn run(output: anytype, opt: Options) !void {
             //         try cmp.flush();
             //         if (n < buf.len) break;
             //     }
-            //     try cmp.close();
+            //     try cmp.finish();
             // },
         }
     }

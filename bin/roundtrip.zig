@@ -41,7 +41,7 @@ pub fn main() !void {
         // Compress the data
         var cmp = try flate.huffman.compressor(buf.writer());
         try cmp.compress(fbs.reader());
-        try cmp.close();
+        try cmp.finish();
 
         // Now try to decompress it
         var buf_fbs = std.io.fixedBufferStream(buf.items);
@@ -62,7 +62,7 @@ pub fn main() !void {
         // Compress the data
         var cmp = try flate.store.compressor(buf.writer());
         try cmp.compress(fbs.reader());
-        try cmp.close();
+        try cmp.finish();
 
         // Now try to decompress it
         var buf_fbs = std.io.fixedBufferStream(buf.items);

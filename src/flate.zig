@@ -158,7 +158,7 @@ test "flate compress/decompress" {
                     var cmp = try deflate.compressor(container, compressed.writer(), .{ .level = level });
                     var cmp_wrt = cmp.writer();
                     try cmp_wrt.writeAll(data);
-                    try cmp.close();
+                    try cmp.finish();
 
                     try testing.expectEqual(compressed_size, compressed.pos);
                 }
@@ -187,7 +187,7 @@ test "flate compress/decompress" {
                     var compressed = fixedBufferStream(&cmp_buf);
                     var cmp = try deflate.huffman.compressor(container, compressed.writer());
                     try cmp.compress(original.reader());
-                    try cmp.close();
+                    try cmp.finish();
                     if (compressed_size == 0) {
                         if (container == .gzip)
                             print("case {d} huffman only compressed size: {d}\n", .{ case_no, compressed.pos });
@@ -219,7 +219,7 @@ test "flate compress/decompress" {
                     var compressed = fixedBufferStream(&cmp_buf);
                     var cmp = try deflate.store.compressor(container, compressed.writer());
                     try cmp.compress(original.reader());
-                    try cmp.close();
+                    try cmp.finish();
                     if (compressed_size == 0) {
                         if (container == .gzip)
                             print("case {d} store only compressed size: {d}\n", .{ case_no, compressed.pos });
