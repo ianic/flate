@@ -44,27 +44,28 @@ pub fn main() !void {
     if (readArgs() catch {
         std.process.exit(1);
     }) |opt| {
-        //const input = opt.input_file.?.reader();
-
         const case = cases[opt.input_index];
         var fbs = std.io.fixedBufferStream(case.data);
         const input = fbs.reader();
 
+        //for (0..10) |_| {
         const n = if (opt.v1lib)
             try v1Gunzip(input)
+        else if (opt.stdLib)
+            try stdLib(input)
         else
             try thisLib(input);
 
         assert(n == case.bytes);
+        //fbs.reset();
+        //}
     }
 }
 
 const Options = struct {
-    input_file: ?std.fs.File = null,
-    input_size: usize = 0,
-
     input_index: u8 = 0,
     v1lib: bool = false,
+    stdLib: bool = false,
 };
 
 pub fn readArgs() !?Options {
@@ -94,6 +95,10 @@ pub fn readArgs() !?Options {
             opt.v1lib = true;
             continue;
         }
+        if (std.mem.eql(u8, a, "-s")) {
+            opt.stdLib = true;
+            continue;
+        }
         if (std.mem.eql(u8, a, "--help") or std.mem.eql(u8, a, "-h")) {
             usage(prog_name);
             return null;
@@ -105,20 +110,15 @@ pub fn readArgs() !?Options {
     return opt;
 }
 
-fn setInputFile(file_name: []const u8, opt: *Options) !void {
-    opt.input_file = std.fs.cwd().openFile(file_name, .{}) catch |err| {
-        print("Fail to open input file '{s}'!\nError: {}\n", .{ file_name, err });
-        return err;
-    };
-    const uncompressed = std.fs.cwd().openFile(file_name[0 .. file_name.len - 3], .{}) catch {
-        return;
-    };
-    opt.input_size = (try uncompressed.stat()).size;
-}
-
 fn thisLib(input: anytype) !usize {
     var cw = std.io.countingWriter(std.io.null_writer);
     try gzip.decompress(input, cw.writer());
+    return cw.bytes_written;
+}
+
+fn stdLib(input: anytype) !usize {
+    var cw = std.io.countingWriter(std.io.null_writer);
+    try std.compress.gzip.decompress(input, cw.writer());
     return cw.bytes_written;
 }
 
