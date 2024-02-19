@@ -19,7 +19,7 @@ pub fn build(b: *std.Build) void {
         .name = "compress",
         // In this case the main source file is merely a path, however, in more
         // complicated build scripts, this could be a generated file.
-        .root_source_file = .{ .path = "src/root.zig" },
+        .root_source_file = .{ .path = "src/compress.zig" },
         .target = target,
         .optimize = optimize,
     });
@@ -43,7 +43,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_lib_unit_tests.step);
 
     const compress_module = b.addModule("compress", .{
-        .root_source_file = .{ .path = "src/root.zig" },
+        .root_source_file = .{ .path = "src/compress.zig" },
     });
 
     const binaries = [_]Binary{

@@ -2,6 +2,7 @@ const std = @import("std");
 const raw = @import("compress").flate;
 const gzip = @import("compress").gzip;
 const zlib = @import("compress").zlib;
+const v1 = @import("compress").v1;
 
 const print = std.debug.print;
 
@@ -30,11 +31,11 @@ pub fn main() !void {
 pub fn run(output: anytype, opt: Options) !void {
     const input = opt.input_file.?.reader();
 
-    if (opt.stdlib) {
+    if (opt.stdv1) {
         switch (opt.alg) {
-            .deflate => try stdDeflate(input, output, opt),
-            .zlib => try stdZlib(input, output, opt),
-            .gzip => try stdGzip(input, output, opt),
+            .deflate => try v1Deflate(input, output, opt),
+            .zlib => try v1Zlib(input, output, opt),
+            .gzip => try v1Gzip(input, output, opt),
         }
     } else {
         if (opt.level == 0) {
@@ -92,7 +93,7 @@ const Options = struct {
     input_file: ?std.fs.File = null,
     //input_index: u8 = 0,
 
-    stdlib: bool = false,
+    stdv1: bool = false,
     alg: Algorithm = .deflate,
     level: u8 = 6,
 };
@@ -104,7 +105,7 @@ fn usage() void {
         \\Options:
         \\  -o <output_file_name>     output to the file
         \\  -c                        write on standard output
-        \\  -s                        use Zig's std lib implementation
+        \\  -v1                       use Zig's v1 std lib implementation
         \\  -g                        gzip
         \\  -z                        zlib
         \\  -l [4-9]                  compression level
@@ -137,8 +138,8 @@ pub fn readArgs() !?Options {
             }
             continue;
         }
-        if (std.mem.eql(u8, a, "-s")) {
-            opt.stdlib = true;
+        if (std.mem.eql(u8, a, "-v1")) {
+            opt.stdv1 = true;
             continue;
         }
         if (std.mem.eql(u8, a, "-l")) {
@@ -191,37 +192,37 @@ pub fn readArgs() !?Options {
 const read_buffer_len = 64 * 1024;
 const allocator = std.heap.page_allocator;
 
-pub fn stdZlib(reader: anytype, writer: anytype, opt: Options) !void {
-    var z_opt: std.compress.zlib.CompressStreamOptions = .{ .level = .default };
+pub fn v1Zlib(reader: anytype, writer: anytype, opt: Options) !void {
+    var z_opt: v1.zlib.CompressStreamOptions = .{ .level = .default };
     if (opt.level == 4) z_opt.level = .fastest;
     if (opt.level == 9) z_opt.level = .maximum;
 
-    var cmp = try std.compress.zlib.compressStream(allocator, writer, z_opt);
+    var cmp = try v1.zlib.compressStream(allocator, writer, z_opt);
     defer cmp.deinit();
     try stream(reader, cmp.writer());
     try cmp.finish();
 }
 
-pub fn stdGzip(reader: anytype, writer: anytype, opt: Options) !void {
-    const c_opt: std.compress.gzip.CompressOptions = if (opt.level == 0)
+pub fn v1Gzip(reader: anytype, writer: anytype, opt: Options) !void {
+    const c_opt: v1.gzip.CompressOptions = if (opt.level == 0)
         .{ .level = .huffman_only }
     else
         .{ .level = @enumFromInt(opt.level) };
 
-    var cmp = try std.compress.gzip.compress(allocator, writer, c_opt);
+    var cmp = try v1.gzip.compress(allocator, writer, c_opt);
     defer cmp.deinit();
     try stream(reader, cmp.writer());
     try cmp.close();
 }
 
-pub fn stdDeflate(reader: anytype, writer: anytype, opt: Options) !void {
-    const c_opt: std.compress.deflate.CompressorOptions = switch (opt.level) {
+pub fn v1Deflate(reader: anytype, writer: anytype, opt: Options) !void {
+    const c_opt: v1.deflate.CompressorOptions = switch (opt.level) {
         0 => .{ .level = .no_compression },
         1 => .{ .level = .huffman_only },
         else => .{ .level = @enumFromInt(opt.level) },
     };
 
-    var cmp = try std.compress.deflate.compressor(allocator, writer, c_opt);
+    var cmp = try v1.deflate.compressor(allocator, writer, c_opt);
     defer cmp.deinit();
     try stream(reader, cmp.writer());
     try cmp.close();

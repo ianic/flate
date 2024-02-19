@@ -1,5 +1,6 @@
 const std = @import("std");
 const gzip = @import("compress").gzip;
+const v1 = @import("compress").v1;
 
 const print = std.debug.print;
 const assert = std.debug.assert;
@@ -34,7 +35,7 @@ fn usage(prog_name: []const u8) void {
         \\
         \\Options:
         \\  -i [0-3]     use one of the test cases, default 0
-        \\  -s           use Zig std lib gzip decompressor
+        \\  -v1           use v1 Zig std lib gzip decompressor
         \\  -h           show this help
     , .{prog_name});
 }
@@ -49,8 +50,8 @@ pub fn main() !void {
         var fbs = std.io.fixedBufferStream(case.data);
         const input = fbs.reader();
 
-        const n = if (opt.stdlib)
-            try stdLib(input)
+        const n = if (opt.v1lib)
+            try v1Gunzip(input)
         else
             try thisLib(input);
 
@@ -63,7 +64,7 @@ const Options = struct {
     input_size: usize = 0,
 
     input_index: u8 = 0,
-    stdlib: bool = false,
+    v1lib: bool = false,
 };
 
 pub fn readArgs() !?Options {
@@ -89,8 +90,8 @@ pub fn readArgs() !?Options {
             continue;
         }
 
-        if (std.mem.eql(u8, a, "-s")) {
-            opt.stdlib = true;
+        if (std.mem.eql(u8, a, "-v1")) {
+            opt.v1lib = true;
             continue;
         }
         if (std.mem.eql(u8, a, "--help") or std.mem.eql(u8, a, "-h")) {
@@ -123,8 +124,8 @@ fn thisLib(input: anytype) !usize {
 
 const allocator = std.heap.page_allocator;
 
-pub fn stdLib(input: anytype) !usize {
-    var dcp = try std.compress.gzip.decompress(allocator, input);
+pub fn v1Gunzip(input: anytype) !usize {
+    var dcp = try v1.gzip.decompress(allocator, input);
     defer dcp.deinit();
 
     //var rdr = dcp.reader();

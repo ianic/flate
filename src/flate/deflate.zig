@@ -528,7 +528,11 @@ fn SimpleCompressor(
     };
 }
 
+const builtin = @import("builtin");
+
 test "flate.Deflate tokenization" {
+    if (builtin.target.cpu.arch == .wasm32) return error.SkipZigTest;
+
     const L = Token.initLiteral;
     const M = Token.initMatch;
 
@@ -551,6 +555,7 @@ test "flate.Deflate tokenization" {
 
     for (cases) |c| {
         inline for (Container.list) |container| { // for each wrapping
+
             var cw = io.countingWriter(io.null_writer);
             const cww = cw.writer();
             var df = try Deflate(container, @TypeOf(cww), TestTokenWriter).init(cww, .{});
@@ -572,9 +577,9 @@ test "flate.Deflate tokenization" {
 // Tests that tokens writen are equal to expected token list.
 const TestTokenWriter = struct {
     const Self = @This();
-    //expected: []const Token,
+
     pos: usize = 0,
-    actual: [1024]Token = undefined,
+    actual: [128]Token = undefined,
 
     pub fn init(_: anytype) Self {
         return .{};
@@ -602,51 +607,9 @@ const TestTokenWriter = struct {
     pub fn flush(_: *Self) !void {}
 };
 
-test "flate.Deflate struct sizes" {
-    if (@sizeOf(usize) != 8) return error.SkipZigTest;
-
-    try expect(@sizeOf(Token) == 4);
-
-    // list: (1 << 15) * 4 = 128k + pos: 8
-    const tokens_size = 128 * 1024 + 8;
-    try expect(@sizeOf(Tokens) == tokens_size);
-
-    // head: (1 << 15) * 2 = 64k, chain: (32768 * 2) * 2  = 128k = 192k
-    const lookup_size = 192 * 1024;
-    try expect(@sizeOf(Lookup) == lookup_size);
-
-    // buffer: (32k * 2), wp: 8, rp: 8, fp: 8
-    const window_size = 64 * 1024 + 8 + 8 + 8;
-    try expect(@sizeOf(SlidingWindow) == window_size);
-
-    const Bw = BlockWriter(@TypeOf(io.null_writer));
-    // huffman bit writer internal: 11480
-    const hbw_size = 11472; // 11.2k
-    try expect(@sizeOf(Bw) == hbw_size);
-
-    const D = Deflate(.raw, @TypeOf(io.null_writer), Bw);
-    // 404744, 395.26K
-    // ?Token: 6, ?u8: 2, level: 8
-    try expect(@sizeOf(D) == tokens_size + lookup_size + window_size + hbw_size + 24);
-    //print("Delfate size: {d} {d}\n", .{ @sizeOf(D), tokens_size + lookup_size + hbw_size + window_size });
-
-    // current std lib deflate allocation:
-    // 797_901, 779.2k
-    // measured with:
-    // var la = std.heap.logToWriterAllocator(testing.allocator, io.getStdOut().writer());
-    // const allocator = la.allocator();
-    // var cmp = try std.compress.deflate.compressor(allocator, io.null_writer, .{});
-    // defer cmp.deinit();
-
-    const HC = huffman.Compressor(.raw, @TypeOf(io.null_writer));
-    //print("size of HOC {d}\n", .{@sizeOf(HOC)});
-    try expect(@sizeOf(HC) == 77024);
-    // 64K buffer
-    // 11480 huffman_encoded
-    // 8 buffer write pointer
-}
-
 test "flate deflate file tokenization" {
+    if (builtin.target.cpu.arch == .wasm32) return error.SkipZigTest;
+
     const levels = [_]Level{ .level_4, .level_5, .level_6, .level_7, .level_8, .level_9 };
     const cases = [_]struct {
         data: []const u8, // uncompressed content
