@@ -1,3 +1,5 @@
+**This project is [merged](https://github.com/ziglang/zig/pull/18923) into Zig standard library!**
+
 Zig deflate compression/decompression implementation. It supports compression and decompression of gzip, zlib and raw deflate format. Andrew [pushed](https://github.com/ziglang/zig/issues/18062) for the implementation from the first principles so I give it a try.
 
 Zig's [implementation](https://github.com/ziglang/zig/tree/master/lib/std/compress/deflate) is ported from [Go](https://github.com/golang/go/tree/master/src/compress/flate) by huge effort of [hdorio](https://github.com/hdorio). Go implementation mainly follows original [zlib](https://github.com/madler/zlib) implementation.
